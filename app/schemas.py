@@ -163,6 +163,64 @@ class MeasurementResultResponse(BaseModel):
     disclaimer: str
 
 
+class TrendBucket(BaseModel):
+    bucket: datetime | str
+    avg: float
+    min: float
+    max: float
+    count: int
+
+
+class TrendResponse(BaseModel):
+    metric_type: str
+    unit: str | None
+    buckets: list[TrendBucket]
+
+
+class BaselineSummary(BaseModel):
+    mean: float
+    stddev: float
+    is_active: bool
+
+
+class PeriodComparison(BaseModel):
+    avg: float
+    change_percent: float | None
+
+
+class MetricSummary(BaseModel):
+    metric_type: str
+    unit: str | None
+    avg: float
+    min: float
+    max: float
+    count: int
+    baseline: BaselineSummary | None
+    previous_period: PeriodComparison | None
+
+
+class PeriodRange(BaseModel):
+    start: datetime
+    end: datetime
+
+
+class SummaryResponse(BaseModel):
+    period: PeriodRange
+    metrics: list[MetricSummary]
+
+
+class DashboardMemberResponse(BaseModel):
+    user_id: uuid.UUID
+    full_name: str
+    last_measurement_at: datetime | None
+    latest: list[ReadingResponse]
+    open_anomalies: int
+
+
+class FamilyDashboardResponse(BaseModel):
+    members: list[DashboardMemberResponse]
+
+
 class DependentCreateRequest(BaseModel):
     """Profil anggota keluarga yang tidak punya akun sendiri (anak/lansia).
 

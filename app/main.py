@@ -10,6 +10,7 @@ from app.api.v1.health import router as health_router
 from app.api.v1.measurements import router as measurements_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.users import router as users_router
+from app.api.v1.vitals import router as vitals_router
 from app.core.config import get_settings
 from app.services.rppg import warm_up as warm_up_rppg
 
@@ -67,3 +68,4 @@ app.include_router(settings_router, prefix="/api/v1/settings", tags=["settings"]
 app.include_router(
     measurements_router, prefix="/api/v1/measurements", tags=["measurements"]
 )
+app.include_router(vitals_router, prefix="/api/v1/vitals", tags=["vitals"])

@@ -6,20 +6,25 @@ import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_family_admin
 from app.db.models import Family, FamilyMember, User
 from app.db.session import get_db
+from app.services import statistics
+from app.services.visibility import accessible_user_ids
 from app.schemas import (
+    DashboardMemberResponse,
     DependentCreateRequest,
+    FamilyDashboardResponse,
     FamilyCreateRequest,
     FamilyJoinRequest,
     FamilyMemberListResponse,
     FamilyMemberResponse,
     FamilyMemberUpdateRequest,
     FamilyResponse,
+    ReadingResponse,
     UserResponse,
 )
 
@@ -250,6 +255,67 @@ def create_dependent(
     db.commit()
     db.refresh(dependent)
     return dependent
+
+
+@router.get("/{family_id}/dashboard", response_model=FamilyDashboardResponse)
+def read_family_dashboard(
+    family_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FamilyDashboardResponse:
+    """Ringkasan status seluruh anggota keluarga (FR-2.4).
+
+    Hanya memuat anggota yang datanya boleh dilihat pemanggil. Anggota
+    yang menyetel privat tidak muncul sama sekali — bukan muncul dengan
+    data kosong, karena itu justru membocorkan bahwa dia menyembunyikan
+    sesuatu.
+    """
+    require_family_access(db, family_id, current_user)
+    visible = accessible_user_ids(db, current_user.id, "vitals")
+
+    rows = db.execute(
+        select(FamilyMember, User)
+        .join(User, User.id == FamilyMember.user_id)
+        .where(
+            FamilyMember.family_id == family_id,
+            FamilyMember.status == "active",
+            FamilyMember.user_id.in_(visible),
+        )
+    ).all()
+
+    members = []
+    for _, user in rows:
+        readings = statistics.latest_readings(db, user.id)
+        members.append(
+            DashboardMemberResponse(
+                user_id=user.id,
+                full_name=user.full_name,
+                last_measurement_at=statistics.last_measurement_at(db, user.id),
+                latest=[
+                    ReadingResponse(
+                        metric_type=r.metric_type,
+                        value=float(r.value),
+                        unit=r.unit,
+                    )
+                    for r in readings
+                ],
+                open_anomalies=_count_open_anomalies(db, user.id),
+            )
+        )
+
+    return FamilyDashboardResponse(members=members)
+
+
+def _count_open_anomalies(db: Session, user_id: uuid.UUID) -> int:
+    """Anomali yang belum ditanggapi user. Selalu 0 sampai deteksi anomali
+    dibangun (Task 13)."""
+    from app.db.models import Anomaly
+
+    return db.execute(
+        select(func.count())
+        .select_from(Anomaly)
+        .where(Anomaly.user_id == user_id, Anomaly.status == "new")
+    ).scalar_one()
 
 
 @router.patch("/{family_id}/members/{user_id}", response_model=FamilyMemberResponse)
