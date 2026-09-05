@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
+COPY scripts ./scripts
 
 # Video wajah ditulis ke sini; di-mount sebagai volume supaya tidak ikut
 # terhapus saat container dibangun ulang.
