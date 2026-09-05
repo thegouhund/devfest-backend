@@ -208,11 +208,17 @@ class MetricType(Base):
 
 class VitalsReading(Base):
     """ERD §2.7. Long-format: satu baris per metrik per waktu, jadi metrik
-    baru tidak perlu kolom baru. Hypertable Timescale di `recorded_at`."""
+    baru tidak perlu kolom baru. Hypertable Timescale di `recorded_at`.
+
+    PK-nya composite `(id, recorded_at)` — bukan `id` saja seperti tabel lain —
+    karena TimescaleDB mewajibkan kolom partisi ikut dalam primary key.
+    `id` tetap unik lewat UUID, jadi secara praktis tetap berperilaku
+    sebagai identifier tunggal.
+    """
 
     __tablename__ = "vitals_readings"
 
-    id: Mapped[uuid.UUID] = pk()
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_uuid)
     measurement_session_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("measurement_sessions.id"), nullable=True, index=True
     )
@@ -221,7 +227,7 @@ class VitalsReading(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
     recorded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, primary_key=True, nullable=False
     )
     metric_type: Mapped[str] = mapped_column(
         ForeignKey("metric_types.code"), nullable=False, index=True

@@ -1,0 +1,21 @@
+services:
+  db:
+    # Image TimescaleDB sudah termasuk pgvector, jadi cukup satu container
+    # untuk kedua ekstensi yang dibutuhkan (ERD §2.7 dan §2.13).
+    image: timescale/timescaledb-ha:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: devfest
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d devfest"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db_data:
