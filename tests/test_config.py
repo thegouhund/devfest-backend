@@ -61,6 +61,7 @@ def test_cors_origins_splits_and_strips() -> None:
         video_storage_path="/tmp/v",
         deepseek_api_key="",
         telegram_bot_token="",
+        telegram_bot_username="",
         backend_cors_origins="http://a ,  http://b ,",
         warm_up_rppg_on_start=False,
         anomaly_zscore_threshold=2.0,

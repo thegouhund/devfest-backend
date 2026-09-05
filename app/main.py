@@ -10,6 +10,7 @@ from app.api.v1.families import router as families_router
 from app.api.v1.health import router as health_router
 from app.api.v1.measurements import router as measurements_router
 from app.api.v1.settings import router as settings_router
+from app.api.v1.telegram import router as telegram_router
 from app.api.v1.users import router as users_router
 from app.api.v1.vitals import router as vitals_router
 from app.core.config import get_settings
@@ -73,3 +74,4 @@ app.include_router(vitals_router, prefix="/api/v1/vitals", tags=["vitals"])
 app.include_router(
     activities_router, prefix="/api/v1/activities", tags=["activities"]
 )
+app.include_router(telegram_router, prefix="/api/v1/telegram", tags=["telegram"])

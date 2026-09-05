@@ -19,6 +19,8 @@ class Settings(BaseModel):
     # External services
     deepseek_api_key: str
     telegram_bot_token: str
+    # Ditampilkan ke user sebagai tujuan pengiriman kode linking.
+    telegram_bot_username: str
 
     backend_cors_origins: str
 
@@ -54,6 +56,7 @@ def get_settings() -> Settings:
         video_storage_path=getenv("VIDEO_STORAGE_PATH", "./data/videos"),
         deepseek_api_key=getenv("DEEPSEEK_API_KEY", ""),
         telegram_bot_token=getenv("TELEGRAM_BOT_TOKEN", ""),
+        telegram_bot_username=getenv("TELEGRAM_BOT_USERNAME", ""),
         backend_cors_origins=getenv(
             "BACKEND_CORS_ORIGINS",
             "http://localhost:5173,http://localhost:3000",

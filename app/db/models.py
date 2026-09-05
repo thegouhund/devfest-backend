@@ -442,9 +442,19 @@ class TelegramLink(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id"), unique=True, nullable=False
     )
-    telegram_chat_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    # Nullable sampai kode ditukarkan: saat kode diterbitkan, chat id-nya
+    # memang belum diketahui — baru terisi ketika user mengirim kode ke bot.
+    telegram_chat_id: Mapped[str | None] = mapped_column(
+        Text, unique=True, nullable=True
+    )
     # Kode sementara saat linking, jadi NULL setelah terhubung.
     link_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Kode linking kedaluwarsa: kode yang bocor lewat screenshot atau chat
+    # tidak boleh berlaku selamanya, karena siapa pun yang memakainya akan
+    # menerima notifikasi kesehatan keluarga ini.
+    link_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     linked_at: Mapped[datetime] = created_at_column()
 

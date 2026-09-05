@@ -22,6 +22,7 @@ from app.db.models import MeasurementSession, User, VitalsReading
 from app.db.session import SessionLocal
 from app.services.anomaly import detect_for_session
 from app.services.baseline import recompute_all_metrics
+from app.services.notification import notify_anomaly
 from app.services.rppg import RppgError, SignalQualityError, extract_vitals
 from app.services.video_storage import save_video
 
@@ -177,10 +178,21 @@ def _store_result(db: Session, session: MeasurementSession, result) -> None:
     # Deteksi anomali memakai baseline yang baru saja diperbarui. Sama
     # seperti di atas: gagal mendeteksi tidak boleh menghapus hasil ukur.
     try:
-        detect_for_session(db, session.id)
+        anomalies = detect_for_session(db, session.id)
         db.commit()
     except Exception:
         db.rollback()
+        return
+
+    # Notifikasi dikirim setelah anomali tersimpan, bukan sebelum: kalau
+    # penyimpanan gagal, user tidak boleh menerima alert untuk sesuatu yang
+    # tidak ada catatannya.
+    for anomaly in anomalies:
+        try:
+            notify_anomaly(db, anomaly)
+            db.commit()
+        except Exception:
+            db.rollback()
 
 
 def _mark_failed(

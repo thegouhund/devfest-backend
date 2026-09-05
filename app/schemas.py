@@ -203,6 +203,25 @@ class MeasurementResultResponse(BaseModel):
         return as_utc(value)
 
 
+class TelegramLinkResponse(BaseModel):
+    link_code: str
+    bot_username: str | None
+    expires_at: datetime
+
+    @field_serializer("expires_at")
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class TelegramStatusResponse(BaseModel):
+    is_linked: bool
+    linked_at: datetime | None
+
+    @field_serializer("linked_at")
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
 ACTIVITY_CATEGORIES = Literal[
     "coffee", "exercise", "smoking", "alcohol", "sleep", "meal", "other"
 ]
