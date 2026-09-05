@@ -132,8 +132,14 @@ def _get_model():
         try:
             import rppg
         except ImportError as exc:
+            # `exc` disertakan apa adanya: paket `open-rppg` sendiri bisa saja
+            # terpasang tapi salah satu dependency-nya (jax, onnxruntime,
+            # keras) yang gagal diimpor — pesan generik "belum terpasang"
+            # menyesatkan penyelidikan kalau penyebabnya bukan itu.
             raise RppgError(
-                "Paket open-rppg belum terpasang. Jalankan: pip install open-rppg"
+                f"Paket open-rppg atau salah satu dependency-nya gagal diimpor: {exc}. "
+                "Kalau open-rppg sendiri sudah terpasang (cek: pip show open-rppg), "
+                "masalahnya ada di salah satu dependency-nya."
             ) from exc
         _model = rppg.Model()
     return _model
