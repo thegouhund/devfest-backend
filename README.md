@@ -213,7 +213,7 @@ kontrak untuk frontend ada di [`API_CONTRACT.md`](../devfest-md/API_CONTRACT.md)
 | | `PATCH\|DELETE /activities/{id}` | Ubah atau hapus catatan |
 | **Anomali** | `GET /anomalies`, `GET /anomalies/{id}` | Daftar dan detail beserta konteks penyebab |
 | | `PATCH /anomalies/{id}` | Tandai sudah dibaca atau diabaikan |
-| **Telegram** | `POST\|DELETE /telegram/link`, `GET /telegram/status` | Sambungkan dan putuskan notifikasi |
+| **Telegram** | `GET /telegram/status` | Status konfigurasi notifikasi (global, lihat catatan di bawah) |
 | **Chat** | `POST /chat` | Kirim pesan ke health companion |
 | | `GET /chat/conversations`, `GET /chat/conversations/{id}` | Riwayat percakapan sendiri |
 
@@ -232,8 +232,8 @@ Semua lewat environment variable. Lihat [`.env.example`](.env.example).
 | `DEEPSEEK_API_KEY` | Chatbot | — | API key LLM. Tanpa ini chat nonaktif, API tetap jalan |
 | `LLM_MODEL` | — | `deepseek-chat` | Model yang dipakai chatbot |
 | `LLM_BASE_URL` | — | `https://api.deepseek.com` | Ganti untuk pindah penyedia LLM |
-| `TELEGRAM_BOT_TOKEN` | Notifikasi | — | Token bot. Tanpa ini notifikasi tercatat `failed` |
-| `TELEGRAM_BOT_USERNAME` | — | — | Username bot tanpa `@`, ditampilkan saat linking |
+| `TELEGRAM_BOT_TOKEN` | Notifikasi | — | Token bot. Tanpa ini notifikasi tercatat `pending`/`failed` |
+| `TELEGRAM_DEFAULT_CHAT_ID` | Notifikasi | — | Satu chat_id tetap untuk SEMUA akun (lihat catatan di bawah) |
 | `WARM_UP_RPPG_ON_START` | — | `true` | Muat model rPPG saat startup |
 | `BACKEND_CORS_ORIGINS` | — | `http://localhost:5173,http://localhost:3000` | Origin frontend, dipisah koma |
 | `BASELINE_COLD_START_DAYS` | — | `14` | Minimal hari data sebelum anomali aktif |
@@ -343,6 +343,31 @@ napas dilihat bersamaan, bukan sendiri-sendiri seperti z-score:
 `activity_level_score` mengalir dari fitur yang sama dipakai tombol quick-menu maupun
 chatbot — keduanya menulis ke tabel `activities_log` yang sama, jadi tidak ada jalur
 data terpisah yang perlu dijaga sinkron.
+
+---
+
+## Notifikasi Telegram
+
+Backend ini **hanya mengirim** notifikasi ke Telegram, tidak menerima pesan dari bot
+— tidak ada webhook atau polling `getUpdates`. Konsekuensinya, tujuan pengiriman
+tidak bisa didapat lewat alur "user kirim kode ke bot" (draf awal di ERD §2.13);
+sebagai gantinya dipakai satu `TELEGRAM_DEFAULT_CHAT_ID` tetap untuk **semua akun**.
+
+> [!WARNING]
+> Ini pilihan yang sengaja untuk demo/dev, bukan siap multi-tenant produksi — semua
+> akun berbagi satu tujuan notifikasi Telegram. Untuk linking per-akun yang sungguhan,
+> perlu dibangun endpoint webhook yang menerima pesan dari bot (Telegram akan
+> mem-`POST` update ke situ) dan memanggil ulang mekanisme penukaran kode.
+
+**Cara dapat `chat_id`:**
+
+1. Chat ke bot Telegram-mu sekali (kirim pesan apa saja, mis. `/start`).
+2. Buka `https://api.telegram.org/bot<TOKEN>/getUpdates` di browser.
+3. Salin angka di `"chat":{"id": ...}` dari response JSON-nya.
+4. Set `TELEGRAM_DEFAULT_CHAT_ID` ke angka itu.
+
+Tabel `telegram_links` (dan kolom `link_code`-nya) masih ada di skema database untuk
+kompatibilitas mundur, tapi tidak dipakai lagi — lihat `app/services/telegram.py`.
 
 ---
 

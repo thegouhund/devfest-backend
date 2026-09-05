@@ -23,8 +23,10 @@ class Settings(BaseModel):
     llm_model: str
     llm_base_url: str
     telegram_bot_token: str
-    # Ditampilkan ke user sebagai tujuan pengiriman kode linking.
-    telegram_bot_username: str
+    # Chat id tetap untuk notifikasi (demo/dev): satu tujuan untuk semua
+    # akun, tanpa alur linking per-akun. Kosong berarti notifikasi
+    # Telegram nonaktif — lihat app/services/notification.py.
+    telegram_default_chat_id: str
 
     backend_cors_origins: str
 
@@ -61,7 +63,7 @@ def get_settings() -> Settings:
         llm_model=getenv("LLM_MODEL", "deepseek-chat"),
         llm_base_url=getenv("LLM_BASE_URL", "https://api.deepseek.com"),
         telegram_bot_token=getenv("TELEGRAM_BOT_TOKEN", ""),
-        telegram_bot_username=getenv("TELEGRAM_BOT_USERNAME", ""),
+        telegram_default_chat_id=getenv("TELEGRAM_DEFAULT_CHAT_ID", ""),
         backend_cors_origins=getenv(
             "BACKEND_CORS_ORIGINS",
             "http://localhost:5173,http://localhost:3000",

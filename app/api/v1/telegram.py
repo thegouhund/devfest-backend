@@ -1,64 +1,36 @@
-"""Endpoint penyambungan akun Telegram (PRD FR-5.1)."""
+"""Status konfigurasi Telegram (PRD FR-5.1).
+
+ponytail: notifikasi dikirim ke satu TELEGRAM_DEFAULT_CHAT_ID untuk semua
+akun (lihat app/services/notification.py), bukan lewat linking per-akun —
+alur linking asli butuh webhook yang menerima pesan dari bot, yang di luar
+cakupan saat ini. Endpoint di sini cuma melapor status konfigurasi global,
+tidak ada lagi kode atau chat_id per-akun.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends
 
 from app.core.config import get_settings
 from app.core.security import get_current_account
 from app.db.models import Account
-from app.db.session import get_db
-from app.schemas import TelegramLinkResponse, TelegramStatusResponse
-from app.services import telegram as telegram_service
+from app.schemas import TelegramStatusResponse
 
 
 router = APIRouter()
 
 
-@router.post("/link", response_model=TelegramLinkResponse)
-def request_link_code(
-    current_account: Account = Depends(get_current_account),
-    db: Session = Depends(get_db),
-) -> TelegramLinkResponse:
-    """Terbitkan kode untuk dikirim user ke bot Telegram.
-
-    Kode sekali pakai dan kedaluwarsa; meminta kode baru membatalkan yang
-    lama.
-    """
-    link = telegram_service.issue_link_code(db, current_account.id)
-    db.commit()
-    db.refresh(link)
-
-    return TelegramLinkResponse(
-        link_code=link.link_code,
-        bot_username=get_settings().telegram_bot_username or None,
-        expires_at=link.link_code_expires_at,
-    )
-
-
 @router.get("/status", response_model=TelegramStatusResponse)
-def read_link_status(
+def read_telegram_status(
     current_account: Account = Depends(get_current_account),
-    db: Session = Depends(get_db),
 ) -> TelegramStatusResponse:
-    """Apakah akun sudah tersambung.
+    """Apakah notifikasi Telegram sudah dikonfigurasi di server ini.
 
-    Frontend melakukan polling ke sini setelah menampilkan kode, untuk tahu
-    kapan user selesai mengirimkannya ke bot.
+    Sama untuk semua akun — bukan status linking per-akun, karena tidak
+    ada lagi proses linking.
     """
-    link = telegram_service.active_link(db, current_account.id)
+    settings = get_settings()
     return TelegramStatusResponse(
-        is_linked=link is not None,
-        linked_at=link.linked_at if link else None,
+        is_configured=bool(settings.telegram_bot_token)
+        and bool(settings.telegram_default_chat_id)
     )
-
-
-@router.delete("/link", status_code=status.HTTP_204_NO_CONTENT)
-def remove_link(
-    current_account: Account = Depends(get_current_account),
-    db: Session = Depends(get_db),
-) -> Response:
-    telegram_service.unlink(db, current_account.id)
-    db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models import Anomaly, FamilyMember, Notification
-from app.services.telegram import TelegramDeliveryError, active_link, send_message
+from app.services.telegram import TelegramDeliveryError, send_message
 
 
 CHANNEL_TELEGRAM = "telegram"
@@ -38,11 +38,13 @@ METRIC_LABEL = {
 
 
 def notify_anomaly(db: Session, anomaly: Anomaly) -> list[Notification]:
-    """Kirim notifikasi untuk satu anomali ke akun pemilik profil.
+    """Kirim notifikasi untuk satu anomali ke tujuan Telegram tetap.
 
-    Satu keluarga satu akun, dan Telegram tersambung di level akun — jadi
-    penerimanya tunggal: akun yang menaungi profil subjek (FR-5.2). Nama
-    subjek disebut dalam pesan supaya jelas ini soal siapa.
+    ponytail: satu chat_id dari TELEGRAM_DEFAULT_CHAT_ID untuk SEMUA akun,
+    bukan per-akun lewat alur linking. Cocok untuk demo/dev dengan satu bot
+    pribadi; perlu alur linking asli (webhook menerima pesan bot) sebelum
+    dipakai multi-tenant sungguhan. Nama subjek tetap disebut dalam pesan
+    supaya jelas ini soal siapa walau tujuannya satu untuk semua.
 
     Tidak pernah melempar exception. Pemanggil yang melakukan `commit`.
     """
@@ -72,14 +74,14 @@ def _deliver(
     db.add(notification)
     db.flush()
 
-    link = active_link(db, account_id)
-    if link is None:
-        # Belum menyambungkan Telegram: bukan kegagalan pengiriman, jadi
-        # dibiarkan `pending` sebagai catatan bahwa pesannya tidak terkirim.
+    chat_id = get_settings().telegram_default_chat_id
+    if not chat_id:
+        # Belum dikonfigurasi: bukan kegagalan pengiriman, jadi dibiarkan
+        # `pending` sebagai catatan bahwa pesannya tidak terkirim.
         return notification
 
     try:
-        send_message(link.telegram_chat_id, message)
+        send_message(chat_id, message)
     except (TelegramDeliveryError, Exception):
         # Sengaja menangkap semua: kegagalan notifikasi tidak boleh
         # membatalkan anomali yang sudah tersimpan.

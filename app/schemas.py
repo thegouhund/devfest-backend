@@ -345,23 +345,15 @@ class ChatConversationDetailResponse(BaseModel):
     messages: list[ChatMessageResponse]
 
 
-class TelegramLinkResponse(BaseModel):
-    link_code: str
-    bot_username: str | None
-    expires_at: datetime
-
-    @field_serializer("expires_at")
-    def _utc(self, value: datetime | None) -> datetime | None:
-        return as_utc(value)
-
-
 class TelegramStatusResponse(BaseModel):
-    is_linked: bool
-    linked_at: datetime | None
+    """Status konfigurasi Telegram — global, bukan per-akun.
 
-    @field_serializer("linked_at")
-    def _utc(self, value: datetime | None) -> datetime | None:
-        return as_utc(value)
+    ponytail: TELEGRAM_DEFAULT_CHAT_ID satu untuk semua akun (lihat
+    app/services/notification.py), jadi tidak ada lagi kode-per-akun untuk
+    ditukarkan. `is_configured` cuma melapor apakah setting-nya ada.
+    """
+
+    is_configured: bool
 
 
 ACTIVITY_CATEGORIES = Literal[

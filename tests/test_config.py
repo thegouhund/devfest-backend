@@ -29,6 +29,7 @@ REQUIRED_SETTINGS = {
     "video_storage_path",
     "deepseek_api_key",
     "telegram_bot_token",
+    "telegram_default_chat_id",
     "cors_origins",
     "baseline_cold_start_days",
 }
@@ -62,7 +63,7 @@ def test_cors_origins_splits_and_strips() -> None:
         llm_model="deepseek-chat",
         llm_base_url="https://api.deepseek.com",
         telegram_bot_token="",
-        telegram_bot_username="",
+        telegram_default_chat_id="",
         backend_cors_origins="http://a ,  http://b ,",
         warm_up_rppg_on_start=False,
         baseline_cold_start_days=14,
