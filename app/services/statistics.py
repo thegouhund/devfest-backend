@@ -1,7 +1,7 @@
 """Agregasi vital sign untuk dashboard (PRD FR-2.1 s.d. FR-2.4).
 
-Setiap fungsi di sini menerima himpunan user id yang sudah difilter
-`accessible_user_ids` — bukan menerima id mentah lalu memfilter sendiri.
+Setiap fungsi di sini menerima himpunan profil yang sudah difilter
+`accessible_profile_ids` — bukan menerima id mentah lalu memfilter sendiri.
 Dengan begitu tidak ada jalur yang bisa lupa mengecek privasi.
 """
 
@@ -33,7 +33,7 @@ def metric_unit(db: Session, metric_type: str) -> str | None:
 
 def trend(
     db: Session,
-    user_ids: set[uuid.UUID],
+    profile_ids: set[uuid.UUID],
     metric_type: str,
     start: datetime,
     end: datetime,
@@ -44,7 +44,7 @@ def trend(
     Bucket tanpa data tidak dikembalikan — deretnya berlubang, dan itu
     memang kontraknya: frontend menampilkan celah, bukan nol palsu.
     """
-    if not user_ids:
+    if not profile_ids:
         return []
 
     bucket_column = _bucket_expression(db, bucket)
@@ -58,7 +58,7 @@ def trend(
             func.count(VitalsReading.id).label("count"),
         )
         .where(
-            VitalsReading.user_id.in_(user_ids),
+            VitalsReading.family_member_id.in_(profile_ids),
             VitalsReading.metric_type == metric_type,
             VitalsReading.recorded_at >= start,
             VitalsReading.recorded_at <= end,
@@ -96,13 +96,13 @@ def _bucket_expression(db: Session, bucket: str):
 
 def aggregate(
     db: Session,
-    user_ids: set[uuid.UUID],
+    profile_ids: set[uuid.UUID],
     metric_type: str,
     start: datetime,
     end: datetime,
 ) -> dict | None:
     """Ringkasan satu metrik pada satu rentang. None kalau tidak ada data."""
-    if not user_ids:
+    if not profile_ids:
         return None
 
     row = db.execute(
@@ -112,7 +112,7 @@ def aggregate(
             func.max(VitalsReading.value).label("max"),
             func.count(VitalsReading.id).label("count"),
         ).where(
-            VitalsReading.user_id.in_(user_ids),
+            VitalsReading.family_member_id.in_(profile_ids),
             VitalsReading.metric_type == metric_type,
             VitalsReading.recorded_at >= start,
             VitalsReading.recorded_at <= end,
@@ -130,13 +130,13 @@ def aggregate(
 
 
 def active_baseline(
-    db: Session, user_id: uuid.UUID, metric_type: str
+    db: Session, family_member_id: uuid.UUID, metric_type: str
 ) -> Baseline | None:
     """Baseline terbaru yang sudah aktif (lewat masa cold-start)."""
     return db.execute(
         select(Baseline)
         .where(
-            Baseline.user_id == user_id,
+            Baseline.family_member_id == family_member_id,
             Baseline.metric_type == metric_type,
             Baseline.is_active.is_(True),
         )
@@ -158,14 +158,14 @@ def change_percent(current: float, previous: float) -> float | None:
     return round((current - previous) / previous * 100, 1)
 
 
-def latest_readings(db: Session, user_id: uuid.UUID) -> list[VitalsReading]:
+def latest_readings(db: Session, family_member_id: uuid.UUID) -> list[VitalsReading]:
     """Pembacaan terakhir per metrik, untuk kartu ringkas di dashboard."""
     newest = (
         select(
             VitalsReading.metric_type,
             func.max(VitalsReading.recorded_at).label("recorded_at"),
         )
-        .where(VitalsReading.user_id == user_id)
+        .where(VitalsReading.family_member_id == family_member_id)
         .group_by(VitalsReading.metric_type)
         .subquery()
     )
@@ -176,16 +176,16 @@ def latest_readings(db: Session, user_id: uuid.UUID) -> list[VitalsReading]:
                 newest,
                 (VitalsReading.metric_type == newest.c.metric_type)
                 & (VitalsReading.recorded_at == newest.c.recorded_at),
-            ).where(VitalsReading.user_id == user_id)
+            ).where(VitalsReading.family_member_id == family_member_id)
         )
         .scalars()
         .all()
     )
 
 
-def last_measurement_at(db: Session, user_id: uuid.UUID) -> datetime | None:
+def last_measurement_at(db: Session, family_member_id: uuid.UUID) -> datetime | None:
     return db.execute(
         select(func.max(VitalsReading.recorded_at)).where(
-            VitalsReading.user_id == user_id
+            VitalsReading.family_member_id == family_member_id
         )
     ).scalar_one_or_none()

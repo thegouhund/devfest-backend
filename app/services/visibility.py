@@ -1,9 +1,12 @@
-"""Otoritas tunggal soal siapa boleh melihat data kesehatan siapa (PRD FR-6.2).
+"""Otoritas tunggal soal profil mana yang datanya boleh dilihat (PRD FR-6.2).
 
 Setiap endpoint yang mengembalikan vitals, aktivitas, atau anomali WAJIB
-memfilter lewat `accessible_user_ids`. Aturannya sengaja hanya ada di satu
-tempat: pengecekan yang tersebar di tiap endpoint pasti terlewat di salah
-satunya, dan yang terlewat itu berarti data medis bocor antar anggota keluarga.
+memfilter lewat `accessible_profile_ids`. Aturannya sengaja hanya ada di
+satu tempat: pengecekan yang tersebar di tiap endpoint pasti terlewat di
+salah satunya, dan yang terlewat itu berarti data medis bocor.
+
+Model akun & profil: batas terluar adalah akun. Profil dari akun lain tidak
+pernah terlihat, apa pun setelan privasinya.
 """
 
 from __future__ import annotations
@@ -13,65 +16,39 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import DataVisibilitySetting, FamilyMember, User
+from app.db.models import DataVisibilitySetting, FamilyMember
 
 
-# Nilai default saat user belum pernah mengatur apa pun (PRD FR-6.2).
+# Nilai default saat profil belum pernah diatur (PRD FR-6.2).
 DEFAULT_VISIBILITY = "family"
 
 DATA_TYPES = ("vitals", "activities")
 
 
-def accessible_user_ids(
-    db: Session, viewer_id: uuid.UUID, data_type: str
+def accessible_profile_ids(
+    db: Session, viewer_profile_id: uuid.UUID, data_type: str
 ) -> set[uuid.UUID]:
-    """Kumpulan user id yang datanya boleh dilihat `viewer_id`.
+    """Kumpulan profil yang datanya boleh dilihat `viewer_profile_id`.
 
     Isinya:
-    - diri sendiri — selalu, apa pun setelan privasinya
-    - dependent yang dikelola viewer — admin bertanggung jawab atas kesehatan
-      mereka, jadi setelan privat tidak menyembunyikan dari pengelolanya
-    - sesama anggota family aktif yang setelan `data_type`-nya `family`
+    - dirinya sendiri — selalu, apa pun setelan privasinya
+    - profil lain dalam akun yang sama yang setelan `data_type`-nya `family`
+    - seluruh profil dalam akun kalau pemanggilnya admin — admin memang
+      pengelola akun (FR-6.4)
 
-    Mengembalikan himpunan kosong kalau `viewer_id` bukan user yang valid.
-
-    Anggota yang akunnya dinonaktifkan (`is_active=false`) tetap terlihat:
-    nonaktif berarti tidak bisa login, bukan riwayat kesehatannya dihapus
-    dari dashboard keluarga. Keanggotaan yang `removed` beda hal — itu
-    memang mencabut akses.
+    Mengembalikan himpunan kosong kalau profilnya tidak valid.
     """
-    viewer = db.get(User, viewer_id)
+    viewer = db.get(FamilyMember, viewer_profile_id)
     if viewer is None:
         return set()
 
-    visible = {viewer_id}
-
-    # Dependent yang dikelola viewer, terlepas dari setelan privasinya.
-    managed = (
-        db.execute(select(User.id).where(User.managed_by_user_id == viewer_id))
-        .scalars()
-        .all()
-    )
-    visible.update(managed)
-
-    family_ids = (
-        db.execute(
-            select(FamilyMember.family_id).where(
-                FamilyMember.user_id == viewer_id,
-                FamilyMember.status == "active",
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not family_ids:
-        return visible
+    visible = {viewer_profile_id}
 
     sibling_ids = set(
         db.execute(
-            select(FamilyMember.user_id).where(
-                FamilyMember.family_id.in_(family_ids),
-                FamilyMember.status == "active",
+            select(FamilyMember.id).where(
+                FamilyMember.account_id == viewer.account_id,
+                FamilyMember.is_active.is_(True),
             )
         )
         .scalars()
@@ -79,6 +56,12 @@ def accessible_user_ids(
     )
     candidates = sibling_ids - visible
     if not candidates:
+        return visible
+
+    if viewer.role == "admin":
+        # Admin mengelola seluruh akun, termasuk profil yang ditandai privat
+        # dari dashboard gabungan.
+        visible.update(candidates)
         return visible
 
     visible.update(
@@ -89,8 +72,8 @@ def accessible_user_ids(
     return visible
 
 
-def resolve_visibility(db: Session, user_id: uuid.UUID, data_type: str) -> str:
-    """Setelan efektif seorang user untuk satu jenis data.
+def resolve_visibility(db: Session, profile_id: uuid.UUID, data_type: str) -> str:
+    """Setelan efektif satu profil untuk satu jenis data.
 
     Setelan spesifik (`vitals`/`activities`) mengalahkan `all` yang lebih
     umum; kalau keduanya tidak ada, jatuh ke default.
@@ -98,7 +81,7 @@ def resolve_visibility(db: Session, user_id: uuid.UUID, data_type: str) -> str:
     rows = (
         db.execute(
             select(DataVisibilitySetting).where(
-                DataVisibilitySetting.user_id == user_id,
+                DataVisibilitySetting.family_member_id == profile_id,
                 DataVisibilitySetting.data_type.in_((data_type, "all")),
             )
         )
@@ -109,12 +92,24 @@ def resolve_visibility(db: Session, user_id: uuid.UUID, data_type: str) -> str:
     return by_type.get(data_type) or by_type.get("all") or DEFAULT_VISIBILITY
 
 
-def can_view(db: Session, viewer_id: uuid.UUID, subject_id: uuid.UUID, data_type: str) -> bool:
-    """Versi satu-subjek dari `accessible_user_ids`, untuk endpoint detail."""
-    return subject_id in accessible_user_ids(db, viewer_id, data_type)
+def can_view(
+    db: Session, viewer_profile_id: uuid.UUID, subject_id: uuid.UUID, data_type: str
+) -> bool:
+    """Versi satu-subjek dari `accessible_profile_ids`, untuk endpoint detail."""
+    return subject_id in accessible_profile_ids(db, viewer_profile_id, data_type)
 
 
-def manages_user(db: Session, manager_id: uuid.UUID, subject_id: uuid.UUID) -> bool:
-    """True kalau `subject_id` adalah dependent yang dikelola `manager_id`."""
-    subject = db.get(User, subject_id)
-    return subject is not None and subject.managed_by_user_id == manager_id
+def same_account(db: Session, profile_id: uuid.UUID, other_id: uuid.UUID) -> bool:
+    """True kalau kedua profil berada di akun yang sama.
+
+    Dipakai untuk aksi tulis (mis. mencatat aktivitas atas nama profil
+    lain), yang batasnya akun — bukan setelan visibility yang hanya
+    mengatur tampilan.
+    """
+    profile = db.get(FamilyMember, profile_id)
+    other = db.get(FamilyMember, other_id)
+    return (
+        profile is not None
+        and other is not None
+        and profile.account_id == other.account_id
+    )

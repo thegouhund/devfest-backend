@@ -1,9 +1,16 @@
 """Model SQLAlchemy untuk seluruh tabel di ERD.md §2.
 
+Model akun & profil (ERD §0): `accounts` adalah entitas login, sementara
+`family_members` adalah profil individu yang datanya diukur. Satu akun
+menaungi banyak profil — login sekali, lalu pilih profil aktif.
+
 Konvensi:
-- `user_id` = subjek data, `*_by_user_id` = pelaku input (ERD note 7)
+- `family_member_id` = subjek data, `*_by_family_member_id` = pelaku input
+  (ERD note 7)
 - `metric_type` = FK ke `metric_types.code`, bukan enum Python (ERD note 2)
 - Nilai enum dibatasi lewat CHECK constraint (ERD §0)
+- `conversation_log`, `telegram_links`, `notifications` diikat ke akun,
+  bukan profil (ERD note 8) — chat dan notifikasi beroperasi di level login
 """
 
 from __future__ import annotations
@@ -51,98 +58,103 @@ def created_at_column() -> Mapped[datetime]:
     return mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+def updated_at_column() -> Mapped[datetime]:
+    return mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
 def one_of(column: str, *values: str) -> CheckConstraint:
     """CHECK constraint untuk kolom enum (ERD §3)."""
     allowed = ", ".join(f"'{v}'" for v in values)
     return CheckConstraint(f"{column} IN ({allowed})", name=f"ck_{column}_valid")
 
 
-# --- Akun & keluarga -------------------------------------------------------
+# --- Akun & profil ---------------------------------------------------------
 
 
-class User(Base):
-    """ERD §2.1. Dependent = profil tanpa login, dikelola admin lewat
-    self-FK `managed_by_user_id`, jadi tidak perlu tabel terpisah."""
+class Account(Base):
+    """ERD §2.1. Kredensial login.
 
-    __tablename__ = "users"
+    Tidak memuat data individu sama sekali — nama, tanggal lahir, dan data
+    fisik ada di profil (`family_members`), karena satu akun bisa menaungi
+    beberapa orang.
+    """
+
+    __tablename__ = "accounts"
     __table_args__ = (
         # Keunikan email ditegakkan tanpa memandang huruf besar-kecil, di
         # level database. Normalisasi di schema saja tidak cukup: jalur lain
-        # (seed, import, pembuatan profil dependent) tidak melewatinya.
+        # (seed, import) tidak melewatinya.
         Index(
-            "uq_users_email_lower",
+            "uq_accounts_email_lower",
             func.lower(column("email")),
             unique=True,
-            sqlite_where=column("email").isnot(None),
-            postgresql_where=column("email").isnot(None),
         ),
     )
 
     id: Mapped[uuid.UUID] = pk()
-    # Nullable: dependent tidak punya kredensial sendiri.
-    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
     phone: Mapped[str | None] = mapped_column(Text, nullable=True)
-    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = created_at_column()
+    updated_at: Mapped[datetime] = updated_at_column()
+
+    profiles: Mapped[list[FamilyMember]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+
+
+class FamilyMember(Base):
+    """ERD §2.2. Profil individu di bawah satu akun.
+
+    Hampir seluruh tabel data kesehatan mereferensikan tabel ini, bukan
+    `accounts` — subjek pengukuran adalah orangnya, bukan loginnya.
+
+    PIN opsional (`pin_hash`) menggantikan konsep dependent pada desain
+    sebelumnya: profil tanpa PIN bebas dipilih siapa pun yang sudah login
+    (cocok untuk anak/lansia), profil ber-PIN butuh verifikasi tambahan
+    (cocok untuk yang ingin privasi lebih).
+    """
+
+    __tablename__ = "family_members"
+    __table_args__ = (
+        one_of("role", "admin", "member"),
+        one_of("ui_mode", "standard", "elderly"),
+    )
+
+    id: Mapped[uuid.UUID] = pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id"), nullable=False, index=True
+    )
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     gender: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_dependent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    managed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id"), nullable=True
+    # Label relasi bebas ("Anak", "Ibu", "Kakek") — murni untuk tampilan di
+    # layar pemilihan profil, tidak dipakai logika apa pun (ERD note 9).
+    relationship_label: Mapped[str | None] = mapped_column(
+        "relationship", Text, nullable=True
     )
     # Konteks fisik untuk analisis chatbot, mis. estimasi BMI (PRD FR-4.1).
     height_cm: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     weight: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    role: Mapped[str] = mapped_column(Text, default="member", nullable=False)
+    pin_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Toggle manual, bukan turunan otomatis dari umur (ERD note 10).
+    ui_mode: Mapped[str] = mapped_column(Text, default="standard", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = created_at_column()
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
-    )
+    updated_at: Mapped[datetime] = updated_at_column()
 
-    dependents: Mapped[list[User]] = relationship(remote_side=[managed_by_user_id])
-
-
-class Family(Base):
-    """ERD §2.2."""
-
-    __tablename__ = "families"
-
-    id: Mapped[uuid.UUID] = pk()
-    name: Mapped[str] = mapped_column(Text, nullable=False)
-    invite_code: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False
-    )
-    created_at: Mapped[datetime] = created_at_column()
-
-
-class FamilyMember(Base):
-    """ERD §2.3. Many-to-many user ↔ family, sudah multi-family-ready."""
-
-    __tablename__ = "family_members"
-    __table_args__ = (
-        UniqueConstraint("family_id", "user_id", name="uq_family_member"),
-        one_of("role", "admin", "member"),
-        one_of("status", "active", "removed"),
-    )
-
-    id: Mapped[uuid.UUID] = pk()
-    family_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("families.id"), nullable=False, index=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
-    )
-    role: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, default="active", nullable=False)
-    joined_at: Mapped[datetime] = created_at_column()
+    account: Mapped[Account] = relationship(back_populates="profiles")
 
 
 # --- Pengukuran ------------------------------------------------------------
 
 
 class MeasurementSession(Base):
-    """ERD §2.4. Satu sesi pengukuran rPPG."""
+    """ERD §2.3. Satu sesi pengukuran rPPG."""
 
     __tablename__ = "measurement_sessions"
     __table_args__ = (
@@ -152,11 +164,11 @@ class MeasurementSession(Base):
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
-    initiated_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+    initiated_by_family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False
     )
     capture_method: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[datetime] = mapped_column(
@@ -177,7 +189,7 @@ class MeasurementSession(Base):
 
 
 class VideoStorageRef(Base):
-    """ERD §2.5. Metadata video; file fisik ada di filesystem VPS.
+    """ERD §2.4. Metadata video; file fisik ada di filesystem VPS.
 
     Terpisah dari `measurement_sessions` supaya kebijakan retensi/lokasi
     penyimpanan bisa berubah tanpa menyentuh tabel sesi.
@@ -207,7 +219,7 @@ class VideoStorageRef(Base):
 
 
 class MetricType(Base):
-    """ERD §2.6. Tabel lookup pengganti enum hardcode — menambah metrik
+    """ERD §2.5. Tabel lookup pengganti enum hardcode — menambah metrik
     baru cukup satu INSERT, tanpa migrasi skema."""
 
     __tablename__ = "metric_types"
@@ -222,7 +234,7 @@ class MetricType(Base):
 
 
 class VitalsReading(Base):
-    """ERD §2.7. Long-format: satu baris per metrik per waktu, jadi metrik
+    """ERD §2.6. Long-format: satu baris per metrik per waktu, jadi metrik
     baru tidak perlu kolom baru. Hypertable Timescale di `recorded_at`.
 
     PK-nya composite `(id, recorded_at)` — bukan `id` saja seperti tabel lain —
@@ -237,9 +249,9 @@ class VitalsReading(Base):
     measurement_session_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("measurement_sessions.id"), nullable=True, index=True
     )
-    # Didenormalisasi dari session supaya query dashboard tidak perlu join.
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    # Didenormalisasi dari sesi supaya query dashboard tidak perlu join.
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, primary_key=True, nullable=False
@@ -255,18 +267,18 @@ class VitalsReading(Base):
 
 
 class Baseline(Base):
-    """ERD §2.8. Baseline statistik personal untuk deteksi anomali."""
+    """ERD §2.7. Baseline statistik personal untuk deteksi anomali."""
 
     __tablename__ = "baselines"
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "metric_type", "window_end", name="uq_baseline_window"
+            "family_member_id", "metric_type", "window_end", name="uq_baseline_window"
         ),
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
     metric_type: Mapped[str] = mapped_column(
         ForeignKey("metric_types.code"), nullable=False
@@ -286,7 +298,7 @@ class Baseline(Base):
 
 
 class Anomaly(Base):
-    """ERD §2.9."""
+    """ERD §2.8."""
 
     __tablename__ = "anomalies"
     __table_args__ = (
@@ -295,8 +307,8 @@ class Anomaly(Base):
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
     measurement_session_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("measurement_sessions.id"), nullable=True
@@ -318,7 +330,7 @@ class Anomaly(Base):
 
 
 class ActivityLog(Base):
-    """ERD §2.10. Satu model untuk dua entry point: quick-menu & chat."""
+    """ERD §2.9. Satu model untuk dua entry point: quick-menu & chat."""
 
     __tablename__ = "activities_log"
     __table_args__ = (
@@ -336,11 +348,11 @@ class ActivityLog(Base):
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
-    logged_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+    logged_by_family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False
     )
     category: Mapped[str] = mapped_column(Text, nullable=False)
     quantity: Mapped[float | None] = mapped_column(Numeric, nullable=True)
@@ -358,13 +370,15 @@ class ActivityLog(Base):
 
 
 class ConversationLog(Base):
-    """ERD §2.11."""
+    """ERD §2.10. Diikat ke akun, bukan profil: profil aktif bisa berpindah
+    di tengah satu sesi chat, dan subjeknya dicatat per-fakta di
+    `health_facts` (ERD note 8)."""
 
     __tablename__ = "conversation_log"
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id"), nullable=False, index=True
     )
     started_at: Mapped[datetime] = created_at_column()
     ended_at: Mapped[datetime | None] = mapped_column(
@@ -374,7 +388,7 @@ class ConversationLog(Base):
 
 
 class ConversationMessage(Base):
-    """ERD §2.12. Audit trail; sumber memory sebenarnya ada di health_facts."""
+    """ERD §2.11. Audit trail; sumber memory sebenarnya ada di health_facts."""
 
     __tablename__ = "conversation_messages"
     __table_args__ = (
@@ -397,10 +411,11 @@ class ConversationMessage(Base):
 
 
 class HealthFact(Base):
-    """ERD §2.13. Fakta hasil ekstraksi chat untuk RAG.
+    """ERD §2.12. Fakta hasil ekstraksi chat untuk RAG.
 
-    Subjek fakta (`user_id`) bisa beda dari yang menceritakan
-    (`reported_by_user_id`) — mis. orang tua bercerita soal anaknya.
+    Subjek fakta (`family_member_id`) bisa beda dari profil yang aktif saat
+    menceritakannya (`reported_by_family_member_id`) — mis. orang tua
+    bercerita soal anaknya.
     """
 
     __tablename__ = "health_facts"
@@ -417,11 +432,11 @@ class HealthFact(Base):
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
-    reported_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+    reported_by_family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False
     )
     source_conversation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("conversation_log.id"), nullable=True
@@ -433,33 +448,29 @@ class HealthFact(Base):
         Numeric(3, 2), nullable=True
     )
     created_at: Mapped[datetime] = created_at_column()
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
-    )
+    updated_at: Mapped[datetime] = updated_at_column()
 
 
 # --- Notifikasi & privasi --------------------------------------------------
 
 
 class TelegramLink(Base):
-    """ERD §2.14."""
+    """ERD §2.13. Satu link melayani seluruh profil dalam satu akun —
+    notifikasi beroperasi di level login, bukan per orang (ERD note 8)."""
 
     __tablename__ = "telegram_links"
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), unique=True, nullable=False
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id"), unique=True, nullable=False
     )
     # Nullable sampai kode ditukarkan: saat kode diterbitkan, chat id-nya
-    # memang belum diketahui — baru terisi ketika user mengirim kode ke bot.
+    # memang belum diketahui.
     telegram_chat_id: Mapped[str | None] = mapped_column(
         Text, unique=True, nullable=True
     )
-    # Kode sementara saat linking, jadi NULL setelah terhubung.
     link_code: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Kode linking kedaluwarsa: kode yang bocor lewat screenshot atau chat
-    # tidak boleh berlaku selamanya, karena siapa pun yang memakainya akan
-    # menerima notifikasi kesehatan keluarga ini.
+    # Kode yang bocor lewat screenshot tidak boleh berlaku selamanya.
     link_code_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -468,7 +479,8 @@ class TelegramLink(Base):
 
 
 class Notification(Base):
-    """ERD §2.15. Log pengiriman untuk audit & debugging delivery."""
+    """ERD §2.14. Penerima adalah akun; isi pesan menyebut nama profil yang
+    mengalami anomali."""
 
     __tablename__ = "notifications"
     __table_args__ = (
@@ -477,8 +489,8 @@ class Notification(Base):
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id"), nullable=False, index=True
     )
     anomaly_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("anomalies.id"), nullable=True
@@ -493,22 +505,23 @@ class Notification(Base):
 
 
 class DataVisibilitySetting(Base):
-    """ERD §2.16. Kontrol privasi per user per jenis data (FR-6.2)."""
+    """ERD §2.15. Mengatur apakah data suatu profil ikut tampil di dashboard
+    gabungan akun (FR-6.2)."""
 
     __tablename__ = "data_visibility_settings"
     __table_args__ = (
-        UniqueConstraint("user_id", "data_type", name="uq_visibility_per_type"),
+        UniqueConstraint(
+            "family_member_id", "data_type", name="uq_visibility_per_type"
+        ),
         one_of("data_type", "vitals", "activities", "all"),
         one_of("visibility", "family", "private"),
     )
 
     id: Mapped[uuid.UUID] = pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    family_member_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("family_members.id"), nullable=False, index=True
     )
     data_type: Mapped[str] = mapped_column(Text, nullable=False)
     visibility: Mapped[str] = mapped_column(Text, default="family", nullable=False)
     created_at: Mapped[datetime] = created_at_column()
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
-    )
+    updated_at: Mapped[datetime] = updated_at_column()

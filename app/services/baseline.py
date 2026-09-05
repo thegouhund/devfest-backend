@@ -72,13 +72,13 @@ def compute_baseline(values: list[float]) -> BaselineStats | None:
     )
 
 
-def recompute_for_user(
+def recompute_for_profile(
     db: Session,
-    user_id: uuid.UUID,
+    family_member_id: uuid.UUID,
     metric_type: str,
     window_end: datetime | None = None,
 ) -> Baseline | None:
-    """Hitung ulang baseline satu user untuk satu metrik.
+    """Hitung ulang baseline satu profil untuk satu metrik.
 
     Pemanggil yang melakukan `commit`. Mengembalikan None kalau belum ada
     pembacaan sama sekali.
@@ -91,7 +91,7 @@ def recompute_for_user(
         float(value)
         for value in db.execute(
             select(VitalsReading.value).where(
-                VitalsReading.user_id == user_id,
+                VitalsReading.family_member_id == family_member_id,
                 VitalsReading.metric_type == metric_type,
                 VitalsReading.recorded_at >= window_start,
                 VitalsReading.recorded_at <= window_end,
@@ -104,12 +104,12 @@ def recompute_for_user(
         return None
 
     is_active = _has_enough_history(
-        db, user_id, metric_type, window_end, settings.baseline_cold_start_days
+        db, family_member_id, metric_type, window_end, settings.baseline_cold_start_days
     )
 
     return _upsert(
         db,
-        user_id=user_id,
+        family_member_id=family_member_id,
         metric_type=metric_type,
         stats=stats,
         window_start=window_start,
@@ -120,7 +120,7 @@ def recompute_for_user(
 
 def _has_enough_history(
     db: Session,
-    user_id: uuid.UUID,
+    family_member_id: uuid.UUID,
     metric_type: str,
     window_end: datetime,
     cold_start_days: int,
@@ -134,7 +134,7 @@ def _has_enough_history(
     earliest = db.execute(
         select(VitalsReading.recorded_at)
         .where(
-            VitalsReading.user_id == user_id,
+            VitalsReading.family_member_id == family_member_id,
             VitalsReading.metric_type == metric_type,
         )
         .order_by(VitalsReading.recorded_at)
@@ -154,7 +154,7 @@ def _has_enough_history(
 def _upsert(
     db: Session,
     *,
-    user_id: uuid.UUID,
+    family_member_id: uuid.UUID,
     metric_type: str,
     stats: BaselineStats,
     window_start: datetime,
@@ -163,12 +163,12 @@ def _upsert(
 ) -> Baseline:
     """Simpan baseline, menimpa snapshot di window yang sama.
 
-    UNIQUE(user_id, metric_type, window_end) melarang baris kedua, jadi
+    UNIQUE(family_member_id, metric_type, window_end) melarang baris kedua, jadi
     hitung ulang harus memperbarui baris lama.
     """
     existing = db.execute(
         select(Baseline).where(
-            Baseline.user_id == user_id,
+            Baseline.family_member_id == family_member_id,
             Baseline.metric_type == metric_type,
             Baseline.window_end == window_end,
         )
@@ -176,7 +176,7 @@ def _upsert(
 
     if existing is None:
         existing = Baseline(
-            user_id=user_id,
+            family_member_id=family_member_id,
             metric_type=metric_type,
             window_end=window_end,
         )
@@ -191,8 +191,8 @@ def _upsert(
     return existing
 
 
-def recompute_all_metrics(db: Session, user_id: uuid.UUID) -> list[Baseline]:
-    """Hitung ulang seluruh metrik seorang user.
+def recompute_all_metrics(db: Session, family_member_id: uuid.UUID) -> list[Baseline]:
+    """Hitung ulang seluruh metrik satu profil.
 
     Dipanggil setelah sesi pengukuran selesai, supaya baseline selalu
     mencerminkan data terbaru.
@@ -200,7 +200,7 @@ def recompute_all_metrics(db: Session, user_id: uuid.UUID) -> list[Baseline]:
     metrics = (
         db.execute(
             select(VitalsReading.metric_type)
-            .where(VitalsReading.user_id == user_id)
+            .where(VitalsReading.family_member_id == family_member_id)
             .distinct()
         )
         .scalars()
@@ -209,7 +209,7 @@ def recompute_all_metrics(db: Session, user_id: uuid.UUID) -> list[Baseline]:
 
     results = []
     for metric_type in metrics:
-        baseline = recompute_for_user(db, user_id, metric_type)
+        baseline = recompute_for_profile(db, family_member_id, metric_type)
         if baseline is not None:
             results.append(baseline)
     return results

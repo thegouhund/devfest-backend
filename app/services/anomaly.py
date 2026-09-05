@@ -117,7 +117,7 @@ def detect(db: Session, reading: VitalsReading) -> list[Anomaly]:
 
     Pemanggil yang melakukan `commit`.
     """
-    baseline = _active_baseline(db, reading.user_id, reading.metric_type)
+    baseline = _active_baseline(db, reading.family_member_id, reading.metric_type)
     if baseline is None:
         return []
 
@@ -131,7 +131,7 @@ def detect(db: Session, reading: VitalsReading) -> list[Anomaly]:
         return []
 
     anomaly = Anomaly(
-        user_id=reading.user_id,
+        family_member_id=reading.family_member_id,
         measurement_session_id=reading.measurement_session_id,
         related_activity_id=_nearest_activity_id(db, reading),
         metric_type=reading.metric_type,
@@ -169,17 +169,17 @@ def detect_for_session(db: Session, session_id: uuid.UUID) -> list[Anomaly]:
 
 
 def _active_baseline(
-    db: Session, user_id: uuid.UUID, metric_type: str
+    db: Session, family_member_id: uuid.UUID, metric_type: str
 ) -> Baseline | None:
-    """Baseline terbaru milik user ini yang sudah melewati cold-start.
+    """Baseline terbaru milik profil ini yang sudah melewati cold-start.
 
-    Difilter per user: baseline bersifat personal, memakai milik orang lain
-    berarti membandingkan seseorang dengan tubuh orang lain.
+    Difilter per profil: baseline bersifat personal, memakai milik orang
+    lain berarti membandingkan seseorang dengan tubuh orang lain.
     """
     return db.execute(
         select(Baseline)
         .where(
-            Baseline.user_id == user_id,
+            Baseline.family_member_id == family_member_id,
             Baseline.metric_type == metric_type,
             Baseline.is_active.is_(True),
         )
@@ -201,7 +201,7 @@ def _nearest_activity_id(db: Session, reading: VitalsReading) -> uuid.UUID | Non
     return db.execute(
         select(ActivityLog.id)
         .where(
-            ActivityLog.user_id == reading.user_id,
+            ActivityLog.family_member_id == reading.family_member_id,
             ActivityLog.occurred_at <= recorded_at,
             ActivityLog.occurred_at >= recorded_at - ACTIVITY_CONTEXT_WINDOW,
         )

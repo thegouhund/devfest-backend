@@ -1,5 +1,10 @@
 """Hashing password, JWT, dan otorisasi.
 
+Model akun & profil (ERD §0): login terjadi di level `accounts`, sementara
+data kesehatan melekat pada `family_members` (profil). Token membawa
+`sub` (akun) dan opsional `profile` (profil aktif) — profil ber-PIN baru
+masuk token setelah PIN diverifikasi.
+
 Data kesehatan bersifat sensitif (PRD §6.1), jadi setiap kegagalan di sini
 harus menutup akses, bukan membiarkannya lewat.
 """
@@ -13,11 +18,11 @@ import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import FamilyMember, User
+from app.db.models import Account, FamilyMember
 from app.db.session import get_db
 
 
@@ -62,7 +67,7 @@ def _jwt_secret() -> str:
     return secret
 
 
-# --- Password --------------------------------------------------------------
+# --- Password & PIN --------------------------------------------------------
 
 
 def hash_password(password: str) -> str:
@@ -80,19 +85,37 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+# PIN profil memakai hashing yang sama dengan password. PIN jauh lebih
+# pendek dan mudah ditebak, tapi ia lapisan tambahan di dalam akun yang
+# sudah login — bukan pengganti password.
+hash_pin = hash_password
+verify_pin = verify_password
+
+
 # --- Token -----------------------------------------------------------------
 
 
 def create_access_token(
-    user_id: uuid.UUID, expires_delta: timedelta | None = None
+    account_id: uuid.UUID,
+    profile_id: uuid.UUID | None = None,
+    expires_delta: timedelta | None = None,
 ) -> str:
+    """Terbitkan token untuk satu akun, opsional dengan profil aktif.
+
+    `profile_id` disematkan hanya setelah profil dipilih (dan PIN-nya
+    diverifikasi kalau ada), sehingga token tidak bisa dipakai membaca data
+    profil yang belum dibuka.
+    """
     settings = get_settings()
     expire_in = expires_delta or timedelta(minutes=settings.jwt_expire_minutes)
-    payload = {
-        "sub": str(user_id),
+    payload: dict = {
+        "sub": str(account_id),
         "exp": datetime.now(UTC) + expire_in,
         "iat": datetime.now(UTC),
     }
+    if profile_id is not None:
+        payload["profile"] = str(profile_id)
+
     return jwt.encode(payload, _jwt_secret(), algorithm=ALGORITHM)
 
 
@@ -118,70 +141,105 @@ def decode_access_token(token: str) -> dict:
 _DUMMY_HASH = hash_password("dummy-password-untuk-menyamakan-waktu-verifikasi")
 
 
-def authenticate_user(db: Session, email: str, password: str) -> User | None:
-    """Kembalikan user bila kredensial cocok, selain itu None.
+def authenticate_account(db: Session, email: str, password: str) -> Account | None:
+    """Kembalikan akun bila kredensial cocok, selain itu None.
 
-    Dependent (`password_hash` NULL) tidak pernah bisa login — profilnya
-    dikelola admin, bukan diakses sendiri (ERD §2.1).
-
-    Verifikasi hash tetap dijalankan walau user tidak ada, supaya waktu
+    Verifikasi hash tetap dijalankan walau akun tidak ada, supaya waktu
     respons tidak membocorkan email mana yang terdaftar. Tanpa ini,
-    selisihnya ~1000x dan siapa pun bisa memetakan anggota keluarga.
+    selisihnya ~1000x dan siapa pun bisa memetakan pengguna.
     """
-    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    account = db.execute(
+        select(Account).where(func.lower(Account.email) == email.lower())
+    ).scalar_one_or_none()
 
-    if user is None or user.password_hash is None or not user.is_active:
+    if account is None or not account.is_active:
         verify_password(password, _DUMMY_HASH)
         return None
 
-    if not verify_password(password, user.password_hash):
+    if not verify_password(password, account.password_hash):
         return None
-    return user
+    return account
 
 
-def resolve_current_user(db: Session, token: str) -> User:
-    """Terjemahkan token jadi user aktif. Dipisah dari dependency FastAPI
-    supaya bisa dipakai ulang di Chainlit (Task 21) yang bukan HTTP request."""
+def resolve_current_account(db: Session, token: str) -> Account:
+    """Terjemahkan token jadi akun aktif.
+
+    Dipisah dari dependency FastAPI supaya bisa dipakai ulang di luar
+    konteks HTTP request.
+    """
     payload = decode_access_token(token)
+    account = _account_from_payload(db, payload)
+    return account
+
+
+def _account_from_payload(db: Session, payload: dict) -> Account:
     subject = payload.get("sub")
     if not subject:
         raise credentials_error
 
     try:
-        user_id = uuid.UUID(subject)
+        account_id = uuid.UUID(subject)
     except ValueError:
         raise credentials_error from None
 
-    user = db.get(User, user_id)
-    # User terhapus atau dinonaktifkan setelah token terbit harus langsung
+    account = db.get(Account, account_id)
+    # Akun terhapus atau dinonaktifkan setelah token terbit harus langsung
     # kehilangan akses, tanpa menunggu token kedaluwarsa.
-    if user is None or not user.is_active:
+    if account is None or not account.is_active:
         raise credentials_error
-    return user
+    return account
 
 
-def get_current_user(
+def get_current_account(
     db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)
-) -> User:
-    return resolve_current_user(db, token)
+) -> Account:
+    return resolve_current_account(db, token)
+
+
+def get_current_profile(
+    db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)
+) -> FamilyMember:
+    """Profil aktif dari token.
+
+    Menolak 403 kalau token belum memuat profil — endpoint data kesehatan
+    butuh subjek yang jelas, dan memilih profil secara diam-diam berisiko
+    menulis data ke orang yang salah.
+    """
+    payload = decode_access_token(token)
+    account = _account_from_payload(db, payload)
+
+    profile_id = payload.get("profile")
+    if not profile_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Pilih profil dulu sebelum mengakses data",
+        )
+
+    try:
+        profile = db.get(FamilyMember, uuid.UUID(profile_id))
+    except ValueError:
+        raise credentials_error from None
+
+    # Profil harus milik akun di token yang sama: tanpa cek ini, token bisa
+    # disusun ulang untuk menunjuk profil milik akun lain.
+    if profile is None or profile.account_id != account.id or not profile.is_active:
+        raise credentials_error
+
+    return profile
 
 
 # --- Otorisasi -------------------------------------------------------------
 
 
-def require_family_admin(db: Session, user: User, family_id: uuid.UUID) -> FamilyMember:
-    """Pastikan `user` admin aktif di family tersebut, kalau tidak 403."""
-    membership = db.execute(
-        select(FamilyMember).where(
-            FamilyMember.family_id == family_id,
-            FamilyMember.user_id == user.id,
-            FamilyMember.role == "admin",
-            FamilyMember.status == "active",
-        )
-    ).scalar_one_or_none()
-    if membership is None:
+def require_admin_profile(profile: FamilyMember = Depends(get_current_profile)):
+    """Pastikan profil aktif punya role admin, kalau tidak 403.
+
+    Admin adalah profil yang dibuat saat registrasi; hanya dia yang boleh
+    menambah, mengubah, dan menghapus profil lain (FR-6.4).
+    """
+    if profile.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Butuh hak admin di family ini",
+            detail="Hanya profil admin yang bisa melakukan ini",
         )
-    return membership
+    return profile
