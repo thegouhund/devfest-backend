@@ -2,14 +2,22 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# libgomp1 dibutuhkan scipy/numpy yang dipakai open-rppg. Varian opencv
-# headless tidak butuh libGL, tapi tetap butuh libxcb1 — beberapa build
-# opencv-python-headless masih ditautkan (link) ke libxcb saat startup
-# walau tidak dipakai untuk GUI. Tanpa ini `import cv2` gagal dengan
-# "libxcb.so.1: cannot open shared object file", yang menyamar sebagai
-# "open-rppg belum terpasang" kalau tidak diperiksa sampai ke traceback asli.
+# libgomp1 dibutuhkan scipy/numpy yang dipakai open-rppg. Paket lainnya
+# untuk opencv-python-headless: meski "headless", build-nya masih
+# ditautkan (link) ke sejumlah shared library grafis dasar saat startup,
+# walau tidak dipakai untuk GUI apa pun. Ketauan satu-satu lewat error
+# "cannot open shared object file" (libxcb.so.1, lalu libGL.so.1) — daftar
+# di bawah adalah dependency umum opencv-python-headless di base image
+# minimal (Debian slim), disatukan sekaligus supaya tidak berulang lagi.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 libxcb1 \
+    && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        libxcb1 \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
