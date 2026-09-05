@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -74,6 +75,50 @@ class UserResponse(BaseModel):
     weight: float | None
     is_dependent: bool
     created_at: datetime
+
+
+class FamilyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name tidak boleh kosong")
+        return stripped
+
+
+class FamilyJoinRequest(BaseModel):
+    invite_code: str = Field(min_length=1, max_length=64)
+
+
+class FamilyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    invite_code: str
+    created_at: datetime
+
+
+class FamilyMemberResponse(BaseModel):
+    """Anggota family beserta identitasnya, digabung dari `users`."""
+
+    user_id: uuid.UUID
+    full_name: str
+    role: str
+    status: str
+    is_dependent: bool
+    joined_at: datetime
+
+
+class FamilyMemberListResponse(BaseModel):
+    members: list[FamilyMemberResponse]
+
+
+class FamilyMemberUpdateRequest(BaseModel):
+    role: Literal["admin", "member"]
 
 
 class UserUpdateRequest(BaseModel):
