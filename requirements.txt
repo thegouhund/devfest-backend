@@ -31,6 +31,11 @@ scipy==1.18.1
 # open-rppg masih memakai pkg_resources, yang dihapus di setuptools >= 81.
 setuptools==80.10.2
 
+# --- Deteksi anomali (model dari devfest-ml) ---
+scikit-learn==1.9.0
+pandas==3.0.5
+joblib==1.6.0
+
 # --- Chatbot (Fase 2) ---
 # DeepSeek dipakai lewat antarmuka kompatibel-OpenAI; ganti penyedia cukup
 # menukar LLM_BASE_URL dan LLM_MODEL.

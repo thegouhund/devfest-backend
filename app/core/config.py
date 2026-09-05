@@ -32,9 +32,8 @@ class Settings(BaseModel):
     # tidak memuat JAX ratusan kali.
     warm_up_rppg_on_start: bool
 
-    # Anomaly detection tunables (PRD FR-3.2 / A3) — thresholds are still open items
-    # in PRD §13, so they stay configurable rather than baked into the detector.
-    anomaly_zscore_threshold: float
+    # Baseline cold-start (PRD A3): threshold anomali sendiri sekarang datang
+    # dari bundle model ML (app/ml/anomaly_model.py), bukan dari sini.
     baseline_cold_start_days: int
 
     @property
@@ -69,6 +68,5 @@ def get_settings() -> Settings:
         ),
         warm_up_rppg_on_start=getenv("WARM_UP_RPPG_ON_START", "true").lower()
         not in ("false", "0", "no"),
-        anomaly_zscore_threshold=float(getenv("ANOMALY_ZSCORE_THRESHOLD", "2.0")),
         baseline_cold_start_days=int(getenv("BASELINE_COLD_START_DAYS", "14")),
     )

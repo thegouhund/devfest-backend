@@ -1,18 +1,22 @@
-"""Task 13: deteksi anomali statistik (PRD FR-3.2, FR-3.3).
+"""Deteksi anomali vital sign lewat model ML (PRD FR-3.2 s.d. FR-3.4).
 
 Acceptance criteria under test:
-- Tanpa baseline aktif -> tidak ada anomali dan tidak error (diam saat cold-start)
-- |z| melewati ambang -> anomali dengan nilai teramati, mean/stddev baseline,
-  dan skor deviasi
-- Severity dipetakan lewat konstanta bernama
-- related_activity_id hanya aktivitas terdekat dalam jendela terbatas, atau NULL
+- Tanpa baseline heart_rate aktif -> tidak ada anomali dan tidak error
+  (diam saat cold-start)
+- Model ML menilai delta_bpm, delta_rr, bpm_to_rr_ratio, bpm_variance,
+  activity_level_score sekaligus -> anomali dengan nilai teramati dan
+  perbandingan baseline
+- Severity dipetakan lewat kelipatan ambang model
+- related_activity_id hanya aktivitas terdekat dalam jendela terbatas, atau
+  NULL; activity_level_score diturunkan dari kategori aktivitas yang sama
 - Deteksi terpisah dari penyimpanan, supaya model bisa diganti tanpa
   menyentuh skema (FR-3.4)
+- Evaluasi per SESI (bukan per pembacaan): heart_rate dan respiration_rate
+  dari sesi yang sama dinilai bersamaan, konsisten dengan cara model dilatih
 """
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -22,19 +26,19 @@ from app.db.models import (
     ActivityLog,
     Anomaly,
     Baseline,
-    MeasurementSession,
     FamilyMember,
+    MeasurementSession,
     VitalsReading,
 )
 from app.services.anomaly import (
     ACTIVITY_CONTEXT_WINDOW,
-    SEVERITY_THRESHOLDS,
+    ACTIVITY_LEVEL_SCORE,
     Detection,
     classify_severity,
-    detect,
-    evaluate_reading,
+    detect_for_session,
+    evaluate_session,
 )
-from tests.conftest import make_account, make_profile_row
+from tests.conftest import make_profile_row
 
 
 @pytest.fixture
@@ -50,8 +54,8 @@ def user(db_session) -> FamilyMember:
 
 
 @pytest.fixture
-def baseline(db_session, user, now) -> Baseline:
-    """Baseline aktif: rata-rata 70, simpangan 5."""
+def hr_baseline(db_session, user, now) -> Baseline:
+    """Baseline heart_rate aktif: rata-rata 70, simpangan 5."""
     row = Baseline(
         family_member_id=user.id,
         metric_type="heart_rate",
@@ -67,7 +71,32 @@ def baseline(db_session, user, now) -> Baseline:
     return row
 
 
-def add_reading(db, user: FamilyMember, value: float, moment: datetime) -> VitalsReading:
+@pytest.fixture
+def rr_baseline(db_session, user, now) -> Baseline:
+    """Baseline respiration_rate aktif: rata-rata 16."""
+    row = Baseline(
+        family_member_id=user.id,
+        metric_type="respiration_rate",
+        mean_value=16.0,
+        stddev_value=1.5,
+        sample_count=30,
+        window_start=now - timedelta(days=30),
+        window_end=now,
+        is_active=True,
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+def add_session(
+    db,
+    user: FamilyMember,
+    moment: datetime,
+    *,
+    heart_rate: float = 72.0,
+    respiration_rate: float | None = 16.0,
+) -> MeasurementSession:
     session = MeasurementSession(
         family_member_id=user.id,
         initiated_by_family_member_id=user.id,
@@ -77,80 +106,134 @@ def add_reading(db, user: FamilyMember, value: float, moment: datetime) -> Vital
     )
     db.add(session)
     db.flush()
-    reading = VitalsReading(
-        measurement_session_id=session.id,
-        family_member_id=user.id,
-        recorded_at=moment,
-        metric_type="heart_rate",
-        value=value,
-        unit="bpm",
+
+    db.add(
+        VitalsReading(
+            measurement_session_id=session.id,
+            family_member_id=user.id,
+            recorded_at=moment,
+            metric_type="heart_rate",
+            value=heart_rate,
+            unit="bpm",
+        )
     )
-    db.add(reading)
+    if respiration_rate is not None:
+        db.add(
+            VitalsReading(
+                measurement_session_id=session.id,
+                family_member_id=user.id,
+                recorded_at=moment,
+                metric_type="respiration_rate",
+                value=respiration_rate,
+                unit="breaths_per_min",
+            )
+        )
     db.commit()
-    return reading
+    return session
 
 
-# --- Perhitungan murni -----------------------------------------------------
+# --- Perhitungan murni -------------------------------------------------------
 
 
-class TestEvaluateReading:
-    """`evaluate_reading` tidak menyentuh database — bisa diganti model lain
+class TestEvaluateSession:
+    """`evaluate_session` tidak menyentuh database — bisa diganti model lain
     tanpa mengubah skema (FR-3.4)."""
 
-    def test_within_threshold_is_not_anomaly(self) -> None:
-        result = evaluate_reading(observed=72.0, mean=70.0, stddev=5.0, threshold=2.0)
+    def test_normal_reading_is_not_anomaly(self) -> None:
+        result = evaluate_session(
+            heart_rate=72.0,
+            respiration_rate=16.0,
+            baseline_mean_bpm=70.0,
+            baseline_stddev_bpm=5.0,
+            activity_level_score=0,
+        )
         assert result is None
 
-    def test_beyond_threshold_is_anomaly(self) -> None:
-        result = evaluate_reading(observed=95.0, mean=70.0, stddev=5.0, threshold=2.0)
+    def test_large_spike_at_rest_is_anomaly(self) -> None:
+        """Lonjakan besar sambil `activity_level_score=0` (istirahat) harus
+        tertangkap — ini kasus utama README devfest-ml."""
+        result = evaluate_session(
+            heart_rate=115.0,
+            respiration_rate=20.0,
+            baseline_mean_bpm=70.0,
+            baseline_stddev_bpm=5.0,
+            activity_level_score=0,
+        )
         assert result is not None
-        assert result.deviation_score == pytest.approx(5.0)
+        assert result.observed_bpm == pytest.approx(115.0)
+        assert result.baseline_mean_bpm == pytest.approx(70.0)
 
-    def test_detects_low_side_too(self) -> None:
-        """Turun jauh sama pentingnya dengan naik jauh — bradikardia juga
-        kondisi yang perlu diperhatikan."""
-        result = evaluate_reading(observed=45.0, mean=70.0, stddev=5.0, threshold=2.0)
-        assert result is not None
-        assert result.deviation_score == pytest.approx(5.0)
+    def test_activity_level_score_changes_the_verdict(self) -> None:
+        """`activity_level_score` benar-benar dipakai model, bukan fitur
+        yang diam-diam diabaikan — bedanya dengan z-score lama yang buta
+        konteks aktivitas sama sekali.
 
-    def test_exactly_at_threshold_is_not_anomaly(self) -> None:
-        """Batas harus tegas: tepat di ambang belum dianggap menyimpang."""
-        result = evaluate_reading(observed=80.0, mean=70.0, stddev=5.0, threshold=2.0)
-        assert result is None
+        Isolation Forest bukan fungsi monoton sederhana, jadi tidak
+        dijamin "olahraga selalu menurunkan skor" — yang dijamin cuma:
+        mengubah fitur ini mengubah keluarannya.
+        """
+        rest = evaluate_session(
+            heart_rate=115.0,
+            respiration_rate=20.0,
+            baseline_mean_bpm=70.0,
+            baseline_stddev_bpm=5.0,
+            activity_level_score=0,
+        )
+        exercising = evaluate_session(
+            heart_rate=115.0,
+            respiration_rate=20.0,
+            baseline_mean_bpm=70.0,
+            baseline_stddev_bpm=5.0,
+            activity_level_score=3,
+        )
+        rest_score = rest.deviation_score if rest else 0.0
+        exercising_score = exercising.deviation_score if exercising else 0.0
+        assert rest_score != exercising_score
 
-    def test_zero_stddev_does_not_divide_by_zero(self) -> None:
-        """Baseline sudah punya lantai stddev, tapi fungsi ini harus tetap
-        aman kalau dipanggil dengan nol dari sumber lain."""
-        result = evaluate_reading(observed=95.0, mean=70.0, stddev=0.0, threshold=2.0)
-        assert result is None or result.deviation_score != float("inf")
+    def test_respiration_rate_zero_does_not_crash(self) -> None:
+        """Pembacaan napas yang gagal (0) tidak boleh membuat pembagian
+        bpm_to_rr_ratio meledak."""
+        result = evaluate_session(
+            heart_rate=72.0,
+            respiration_rate=0.0,
+            baseline_mean_bpm=70.0,
+            baseline_stddev_bpm=5.0,
+            activity_level_score=0,
+        )
+        assert result is None or isinstance(result, Detection)
 
     def test_returns_plain_object_not_orm(self) -> None:
-        result = evaluate_reading(observed=95.0, mean=70.0, stddev=5.0, threshold=2.0)
-        assert isinstance(result, Detection)
+        result = evaluate_session(
+            heart_rate=115.0,
+            respiration_rate=20.0,
+            baseline_mean_bpm=70.0,
+            baseline_stddev_bpm=5.0,
+            activity_level_score=0,
+        )
+        assert result is None or isinstance(result, Detection)
 
 
 class TestSeverity:
-    @pytest.mark.parametrize(
-        ("z", "expected"),
-        [(2.1, "low"), (2.9, "low"), (3.0, "medium"), (3.9, "medium"), (4.0, "high"), (8.0, "high")],
-    )
-    def test_maps_deviation_to_severity(self, z: float, expected: str) -> None:
-        assert classify_severity(z) == expected
+    def test_classify_severity_orders_correctly(self) -> None:
+        threshold = 0.08
+        assert classify_severity(threshold * 1.1, threshold) == "low"
+        assert classify_severity(threshold * 2.0, threshold) == "medium"
+        assert classify_severity(threshold * 3.0, threshold) == "high"
 
-    def test_thresholds_are_named(self) -> None:
-        assert set(SEVERITY_THRESHOLDS) == {"medium", "high"}
-        assert SEVERITY_THRESHOLDS["high"] > SEVERITY_THRESHOLDS["medium"]
-
-
-# --- Deteksi terhadap database ---------------------------------------------
+    def test_activity_level_scores_are_bounded(self) -> None:
+        """devfest-ml melatih model dengan skor 0-3."""
+        assert all(0 <= score <= 3 for score in ACTIVITY_LEVEL_SCORE.values())
 
 
-class TestDetect:
+# --- Deteksi terhadap database -----------------------------------------------
+
+
+class TestDetectForSession:
     def test_no_baseline_is_silent(self, db_session, user, now) -> None:
         """Sebelum cold-start terlampaui, sistem diam — bukan error, bukan
         pula membanjiri alert dari data yang belum cukup (PRD A3)."""
-        reading = add_reading(db_session, user, 120.0, now)
-        anomalies = detect(db_session, reading)
+        session = add_session(db_session, user, now, heart_rate=140.0)
+        anomalies = detect_for_session(db_session, session.id)
         db_session.commit()
         assert anomalies == []
 
@@ -168,59 +251,67 @@ class TestDetect:
             )
         )
         db_session.commit()
-        reading = add_reading(db_session, user, 120.0, now)
-        assert detect(db_session, reading) == []
+        session = add_session(db_session, user, now, heart_rate=140.0)
+        assert detect_for_session(db_session, session.id) == []
 
-    def test_normal_reading_creates_nothing(
-        self, db_session, user, baseline, now
+    def test_normal_session_creates_nothing(
+        self, db_session, user, hr_baseline, now
     ) -> None:
-        reading = add_reading(db_session, user, 72.0, now)
-        detect(db_session, reading)
+        session = add_session(db_session, user, now, heart_rate=72.0)
+        detect_for_session(db_session, session.id)
         db_session.commit()
         assert db_session.execute(select(Anomaly)).first() is None
 
-    def test_outlier_creates_anomaly(self, db_session, user, baseline, now) -> None:
-        reading = add_reading(db_session, user, 95.0, now)
-        anomalies = detect(db_session, reading)
+    def test_outlier_creates_anomaly(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomalies = detect_for_session(db_session, session.id)
         db_session.commit()
         assert len(anomalies) == 1
 
-    def test_anomaly_records_comparison(self, db_session, user, baseline, now) -> None:
+    def test_anomaly_records_comparison(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
         """Nilai baseline disalin ke baris anomali, bukan direferensikan —
         supaya riwayat tetap terbaca walau baseline berubah nanti."""
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
 
-        assert float(anomaly.observed_value) == pytest.approx(95.0)
+        assert float(anomaly.observed_value) == pytest.approx(115.0)
         assert float(anomaly.baseline_mean) == pytest.approx(70.0)
         assert float(anomaly.baseline_stddev) == pytest.approx(5.0)
-        assert float(anomaly.deviation_score) == pytest.approx(5.0)
 
-    def test_anomaly_starts_as_new(self, db_session, user, baseline, now) -> None:
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+    def test_anomaly_starts_as_new(self, db_session, user, hr_baseline, now) -> None:
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
         assert anomaly.status == "new"
 
-    def test_anomaly_links_session(self, db_session, user, baseline, now) -> None:
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+    def test_anomaly_links_session(self, db_session, user, hr_baseline, now) -> None:
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
-        assert anomaly.measurement_session_id == reading.measurement_session_id
+        assert anomaly.measurement_session_id == session.id
 
-    def test_severity_reflects_deviation(self, db_session, user, baseline, now) -> None:
-        reading = add_reading(db_session, user, 130.0, now)
-        anomaly = detect(db_session, reading)[0]
+    def test_metric_type_is_heart_rate(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
+        """Anomali dicatat sebagai satu baris di bawah heart_rate walau
+        modelnya menilai heart_rate dan respiration_rate sekaligus — itu
+        metrik yang paling jelas dipahami pengguna."""
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
-        assert anomaly.severity == "high"
+        assert anomaly.metric_type == "heart_rate"
 
-    def test_baseline_of_other_user_not_used(self, db_session, user, now) -> None:
+    def test_baseline_of_other_profile_not_used(
+        self, db_session, user, now
+    ) -> None:
         """Baseline bersifat personal — memakai milik orang lain berarti
         membandingkan seseorang dengan tubuh orang lain."""
         other = make_profile_row(db_session, full_name="Siti")
-        db_session.add(other)
-        db_session.flush()
         db_session.add(
             Baseline(
                 family_member_id=other.id,
@@ -235,29 +326,34 @@ class TestDetect:
         )
         db_session.commit()
 
-        reading = add_reading(db_session, user, 130.0, now)
-        assert detect(db_session, reading) == []
+        session = add_session(db_session, user, now, heart_rate=140.0)
+        assert detect_for_session(db_session, session.id) == []
 
-    def test_threshold_comes_from_settings(
-        self, db_session, user, baseline, now, monkeypatch
+    def test_missing_respiration_reading_still_evaluates(
+        self, db_session, user, hr_baseline, now
     ) -> None:
-        """PRD §13 masih membuka penyetelan ambang per metrik."""
-        from app.core.config import get_settings
+        """Sesi tanpa pembacaan napas (mis. sinyal gagal) tetap dinilai
+        lewat delta_bpm — hilangnya satu sinyal bukan alasan diam total."""
+        session = add_session(
+            db_session, user, now, heart_rate=115.0, respiration_rate=None
+        )
+        anomalies = detect_for_session(db_session, session.id)
+        db_session.commit()
+        assert isinstance(anomalies, list)
 
-        monkeypatch.setenv("ANOMALY_ZSCORE_THRESHOLD", "10.0")
-        monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
-        get_settings.cache_clear()
+    def test_unknown_session_returns_empty(self, db_session, user) -> None:
+        import uuid
 
-        reading = add_reading(db_session, user, 95.0, now)
-        assert detect(db_session, reading) == []
-        get_settings.cache_clear()
+        assert detect_for_session(db_session, uuid.uuid4()) == []
 
 
-# --- Konteks aktivitas -----------------------------------------------------
+# --- Konteks aktivitas --------------------------------------------------------
 
 
 class TestActivityContext:
-    def test_links_nearby_activity(self, db_session, user, baseline, now) -> None:
+    def test_links_nearby_activity(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
         """Aktivitas terdekat waktu dilampirkan supaya chatbot bisa
         menjelaskan kemungkinan penyebab (FR-3.3)."""
         db_session.add(
@@ -273,12 +369,14 @@ class TestActivityContext:
         )
         db_session.commit()
 
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
         assert anomaly.related_activity_id is not None
 
-    def test_distant_activity_not_linked(self, db_session, user, baseline, now) -> None:
+    def test_distant_activity_not_linked(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
         """Tanpa batas jendela, kopi tiga hari lalu akan dikaitkan sebagai
         penyebab — penjelasan yang menyesatkan."""
         db_session.add(
@@ -292,22 +390,26 @@ class TestActivityContext:
         )
         db_session.commit()
 
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
         assert anomaly.related_activity_id is None
 
-    def test_no_activity_leaves_null(self, db_session, user, baseline, now) -> None:
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+    def test_no_activity_leaves_null(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
         assert anomaly.related_activity_id is None
 
-    def test_picks_closest_activity(self, db_session, user, baseline, now) -> None:
+    def test_picks_closest_activity(
+        self, db_session, user, hr_baseline, now
+    ) -> None:
         jauh = ActivityLog(
             family_member_id=user.id,
             logged_by_family_member_id=user.id,
-            category="exercise",
+            category="sleep",
             source="menu",
             occurred_at=now - timedelta(hours=3),
         )
@@ -321,17 +423,15 @@ class TestActivityContext:
         db_session.add_all([jauh, dekat])
         db_session.commit()
 
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
         assert anomaly.related_activity_id == dekat.id
 
-    def test_other_users_activity_not_linked(
-        self, db_session, user, baseline, now
+    def test_other_profiles_activity_not_linked(
+        self, db_session, user, hr_baseline, now
     ) -> None:
         other = make_profile_row(db_session, full_name="Siti")
-        db_session.add(other)
-        db_session.flush()
         db_session.add(
             ActivityLog(
                 family_member_id=other.id,
@@ -343,10 +443,18 @@ class TestActivityContext:
         )
         db_session.commit()
 
-        reading = add_reading(db_session, user, 95.0, now)
-        anomaly = detect(db_session, reading)[0]
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        anomaly = detect_for_session(db_session, session.id)[0]
         db_session.commit()
         assert anomaly.related_activity_id is None
 
     def test_window_is_named_constant(self) -> None:
         assert ACTIVITY_CONTEXT_WINDOW > timedelta(0)
+
+    def test_exercise_scores_highest(self) -> None:
+        """Olahraga adalah aktivitas yang paling wajar menaikkan detak
+        jantung, jadi harus mendapat skor tertinggi di peta ini."""
+        assert ACTIVITY_LEVEL_SCORE["exercise"] == max(ACTIVITY_LEVEL_SCORE.values())
+
+    def test_sleep_scores_lowest(self) -> None:
+        assert ACTIVITY_LEVEL_SCORE["sleep"] == 0

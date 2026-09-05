@@ -4,8 +4,8 @@
 
 **Monitoring kesehatan keluarga lewat kamera. Tanpa wearable, tanpa alat tambahan.**
 
-Backend FastAPI untuk pengukuran vital sign berbasis rPPG, deteksi anomali statistik,
-dan AI health companion dengan memory personal.
+Backend FastAPI untuk pengukuran vital sign berbasis rPPG, deteksi anomali lewat
+model ML (Isolation Forest), dan AI health companion dengan memory personal.
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -46,11 +46,11 @@ Dirancang untuk satu keluarga (2–8 anggota), tapi skemanya sudah *multi-family
 
 | Modul | Kemampuan |
 |---|---|
-| **Auth & Family** | Akun standalone atau family group, role admin/member, profil *dependent* untuk anak & lansia tanpa akun sendiri |
-| **Privasi** | Kontrol visibilitas per jenis data — anggota bisa menandai data tertentu privat dari anggota lain |
+| **Auth & Profil** | Satu akun per keluarga, admin membuat profil untuk tiap anggota — tanpa login terpisah untuk mereka |
+| **Privasi** | Kontrol visibilitas per jenis data — profil bisa ditandai privat dari sesama anggota |
 | **Pengukuran** | Live capture via webcam atau upload video, pemrosesan rPPG server-side, indikator kualitas sinyal |
 | **Statistik** | Tren harian/mingguan/bulanan, ringkasan min/max/rata-rata, overlay aktivitas pada grafik |
-| **Anomali** | Baseline personal (rolling mean/stddev), deteksi z-score, konteks aktivitas terdekat |
+| **Anomali** | Model Isolation Forest (dilatih di devfest-ml) menilai delta detak jantung, laju napas, dan konteks aktivitas sekaligus |
 | **Notifikasi** | Telegram bot, alert instan saat anomali terdeteksi |
 | **Chatbot** | LangChain + DeepSeek, tool-calling ke data asli, mencatat aktivitas dari kalimat biasa |
 | **Activity Log** | Dua entry point (quick-menu & chat) ke satu data model |
@@ -236,7 +236,6 @@ Semua lewat environment variable. Lihat [`.env.example`](.env.example).
 | `TELEGRAM_BOT_USERNAME` | — | — | Username bot tanpa `@`, ditampilkan saat linking |
 | `WARM_UP_RPPG_ON_START` | — | `true` | Muat model rPPG saat startup |
 | `BACKEND_CORS_ORIGINS` | — | `http://localhost:5173,http://localhost:3000` | Origin frontend, dipisah koma |
-| `ANOMALY_ZSCORE_THRESHOLD` | — | `2.0` | Ambang deviasi anomali |
 | `BASELINE_COLD_START_DAYS` | — | `14` | Minimal hari data sebelum anomali aktif |
 | `APP_NAME` | — | `Family Health Monitor` | Judul di OpenAPI docs |
 | `ENVIRONMENT` | — | `local` | Penanda environment |
@@ -265,6 +264,9 @@ devfest-backend/
 │   │   ├── agent.py      # Agent LangChain + prompt pengaman medis
 │   │   ├── llm.py        # Pabrik model, penyedia bisa ditukar
 │   │   └── tools.py      # Tool di atas services/, id user diikat server
+│   ├── ml/
+│   │   ├── anomaly_model.py     # Wrapper bundle Isolation Forest (devfest-ml)
+│   │   └── models/*.pkl         # Bundle: scaler + model + threshold
 │   ├── services/         # Logika bisnis, dipakai ulang REST & chatbot
 │   ├── main.py           # Entry point FastAPI
 │   └── schemas.py        # Skema request/response
@@ -309,6 +311,34 @@ tiga kolom. Metrik baru tidak butuh kolom baru.
 > kolom partisi ikut dalam primary key. `id` tetap UUID unik, jadi perilakunya praktis sama.
 
 Detail lengkap ada di [`ERD.md`](../devfest-md/ERD.md).
+
+---
+
+## Deteksi Anomali (ML)
+
+Model **Isolation Forest** dari [`devfest-ml`](../devfest-ml) menggantikan pendekatan
+z-score per-metrik yang lama. Bundle (`scaler` + `model` + `threshold`) di-load sekali
+di `app/ml/anomaly_model.py` lewat `functools.lru_cache`, bukan per-request.
+
+Modelnya menilai satu sesi pengukuran lewat 5 fitur sekaligus — detak jantung dan laju
+napas dilihat bersamaan, bukan sendiri-sendiri seperti z-score:
+
+| Fitur | Sumber |
+|---|---|
+| `delta_bpm` | Detak jantung sesi ini − rata-rata baseline 30 hari |
+| `delta_rr` | Laju napas sesi ini − rata-rata baseline 30 hari (0 kalau baseline napas belum lewat cold-start) |
+| `bpm_to_rr_ratio` | Detak jantung ÷ laju napas |
+| `bpm_variance` | **Selalu 0** — open-rppg belum mengekspos rangkaian BPM per sesi untuk dihitung variance-nya |
+| `activity_level_score` | 0–3, diturunkan dari kategori `ActivityLog` terdekat sebelum pengukuran (olahraga tertinggi, tidur terendah) |
+
+> [!NOTE]
+> `bpm_variance` yang selalu 0 adalah keterbatasan yang diketahui, ditandai `ponytail:`
+> di `app/services/anomaly.py`. Perbaiki begitu ada sumber datanya (mis. open-rppg
+> mengekspos BPM per frame dalam satu sesi).
+
+`activity_level_score` mengalir dari fitur yang sama dipakai tombol quick-menu maupun
+chatbot — keduanya menulis ke tabel `activities_log` yang sama, jadi tidak ada jalur
+data terpisah yang perlu dijaga sinkron.
 
 ---
 
