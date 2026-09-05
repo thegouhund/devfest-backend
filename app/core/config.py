@@ -17,7 +17,11 @@ class Settings(BaseModel):
     video_storage_path: str
 
     # External services
+    # DeepSeek dipakai lewat antarmuka kompatibel-OpenAI; berpindah
+    # penyedia cukup menukar llm_base_url dan llm_model (PRD §11).
     deepseek_api_key: str
+    llm_model: str
+    llm_base_url: str
     telegram_bot_token: str
     # Ditampilkan ke user sebagai tujuan pengiriman kode linking.
     telegram_bot_username: str
@@ -55,6 +59,8 @@ def get_settings() -> Settings:
         jwt_expire_minutes=int(getenv("JWT_EXPIRE_MINUTES", "1440")),
         video_storage_path=getenv("VIDEO_STORAGE_PATH", "./data/videos"),
         deepseek_api_key=getenv("DEEPSEEK_API_KEY", ""),
+        llm_model=getenv("LLM_MODEL", "deepseek-chat"),
+        llm_base_url=getenv("LLM_BASE_URL", "https://api.deepseek.com"),
         telegram_bot_token=getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_bot_username=getenv("TELEGRAM_BOT_USERNAME", ""),
         backend_cors_origins=getenv(

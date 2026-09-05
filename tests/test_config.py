@@ -60,6 +60,8 @@ def test_cors_origins_splits_and_strips() -> None:
         jwt_expire_minutes=30,
         video_storage_path="/tmp/v",
         deepseek_api_key="",
+        llm_model="deepseek-chat",
+        llm_base_url="https://api.deepseek.com",
         telegram_bot_token="",
         telegram_bot_username="",
         backend_cors_origins="http://a ,  http://b ,",

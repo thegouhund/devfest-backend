@@ -18,11 +18,27 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Objek yang dibuat lewat SQL mentah di migrasi, bukan lewat model. Tanpa
+# daftar ini autogenerate mengira keduanya "kelebihan" dan menyusun perintah
+# DROP di setiap migrasi baru — menghapusnya akan merusak pencarian RAG dan
+# hypertable Timescale.
+MANUALLY_MANAGED_INDEXES = {
+    "ix_health_facts_embedding",      # HNSW untuk similarity search pgvector
+    "vitals_readings_recorded_at_idx",  # dibuat otomatis oleh create_hypertable
+}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "index" and name in MANUALLY_MANAGED_INDEXES:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -37,7 +53,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

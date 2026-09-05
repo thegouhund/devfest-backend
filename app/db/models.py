@@ -377,12 +377,20 @@ class ConversationMessage(Base):
     """ERD §2.12. Audit trail; sumber memory sebenarnya ada di health_facts."""
 
     __tablename__ = "conversation_messages"
-    __table_args__ = (one_of("role", "user", "assistant", "system", "tool"),)
+    __table_args__ = (
+        one_of("role", "user", "assistant", "system", "tool"),
+        UniqueConstraint("conversation_id", "sequence", name="uq_message_sequence"),
+    )
 
     id: Mapped[uuid.UUID] = pk()
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("conversation_log.id"), nullable=False, index=True
     )
+    # Urutan giliran dalam percakapan. `created_at` saja tidak cukup:
+    # beberapa giliran sering tertulis dalam detik yang sama, dan tanpa
+    # penomoran eksplisit jawaban bot bisa muncul sebelum pertanyaannya
+    # (id berupa UUID acak, jadi tidak bisa jadi tie-breaker).
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = created_at_column()
