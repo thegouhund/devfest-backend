@@ -18,6 +18,18 @@ email-validator==2.2.0
 pyjwt==2.10.1
 bcrypt==4.2.1
 
+# --- Pemrosesan sinyal rPPG ---
+# open-rppg membawa JAX; pemanggilan pertama mengompilasi (~20 detik),
+# berikutnya ~1 detik. Model dipanaskan saat startup.
+open-rppg==0.1.1
+# Varian headless: opencv-python biasa butuh libGL yang umumnya tidak ada
+# di VPS/container tanpa GUI.
+opencv-python-headless==5.0.0.93
+numpy==2.5.2
+scipy==1.18.1
+# open-rppg masih memakai pkg_resources, yang dihapus di setuptools >= 81.
+setuptools==80.10.2
+
 # --- Testing ---
 pytest==8.3.4
 httpx==0.28.1
