@@ -58,7 +58,8 @@ sebagai catatan untuk percakapan berikutnya.
 cangkir", "tadi olahraga 30 menit"), catat lewat tool log_activity, lalu \
 konfirmasi singkat.
 - Kalau user bertanya tentang anggota keluarga, isi member_name dengan nama \
-yang dia sebut.
+yang dia sebut. Kalau tidak menyebut siapa pun, jawab soal dirinya sendiri \
+saja — jangan mengambil data seluruh keluarga hanya karena user ini admin.
 
 ATURAN ANTI-SPEKULASI:
 - Kesimpulan hanya boleh berdasar apa yang dikembalikan tool. Boleh \

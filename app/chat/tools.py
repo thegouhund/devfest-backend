@@ -176,22 +176,28 @@ def make_tools(session_factory, actor: FamilyMember) -> list:
             db.close()
 
     @tool
-    def get_anomaly_events(days: int = 30) -> str:
+    def get_anomaly_events(days: int = 30, member_name: str | None = None) -> str:
         """Ambil daftar anomali vital sign user: pengukuran yang menyimpang
         jauh dari kondisi normalnya. days adalah berapa hari ke belakang.
         Pakai ini kalau user bertanya soal peringatan, kejadian tidak biasa,
-        atau kenapa dia dapat notifikasi."""
+        atau kenapa dia dapat notifikasi. member_name diisi hanya kalau user
+        bertanya tentang anggota keluarga lain; kosongkan untuk data user
+        sendiri — walau user ini admin, jangan tarik data seluruh keluarga
+        kalau tidak diminta eksplisit."""
         db = session_factory()
         try:
+            subject_id, penolakan = _resolve_subject(db, member_name)
+            if penolakan:
+                return penolakan
+
             end = datetime.now(UTC)
             start = end - timedelta(days=_clamp_days(days))
 
-            visible = accessible_profile_ids(db, actor_id, "vitals")
             rows = (
                 db.execute(
                     select(Anomaly)
                     .where(
-                        Anomaly.family_member_id.in_(visible),
+                        Anomaly.family_member_id == subject_id,
                         Anomaly.detected_at >= start,
                         Anomaly.detected_at <= end,
                     )

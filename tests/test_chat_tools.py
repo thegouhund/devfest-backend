@@ -275,6 +275,59 @@ class TestAnomalyTool:
         hasil = tools["get_anomaly_events"].invoke({"days": 30})
         assert "tidak ada" in hasil.lower() or "belum" in hasil.lower()
 
+    def test_admin_without_member_name_sees_only_own(
+        self, session_factory, db_session, keluarga_dengan_data, now
+    ) -> None:
+        """Admin bertanya soal anomali tanpa menyebut nama anggota lain
+        harus hanya melihat datanya sendiri — walau admin bisa melihat
+        seluruh keluarga di dashboard, chatbot tidak boleh diam-diam
+        melebar ke situ kalau tidak diminta eksplisit."""
+        db_session.add(
+            Anomaly(
+                family_member_id=keluarga_dengan_data["ibu"]["id"],
+                metric_type="heart_rate",
+                observed_value=130.0,
+                baseline_mean=70.0,
+                baseline_stddev=5.0,
+                deviation_score=12.0,
+                severity="high",
+                status="new",
+                detected_at=now,
+            )
+        )
+        db_session.commit()
+
+        tools = tools_for(session_factory, db_session, keluarga_dengan_data["ayah"]["id"])
+        hasil = tools["get_anomaly_events"].invoke({"days": 30})
+        assert "130" not in hasil
+        assert "tidak ada" in hasil.lower() or "belum" in hasil.lower()
+
+    def test_admin_can_ask_for_other_member_by_name(
+        self, session_factory, db_session, keluarga_dengan_data, now
+    ) -> None:
+        """Menyebut nama eksplisit tetap harus bisa, karena admin memang
+        berhak melihat anomali seluruh keluarga (FR-6.4)."""
+        db_session.add(
+            Anomaly(
+                family_member_id=keluarga_dengan_data["ibu"]["id"],
+                metric_type="heart_rate",
+                observed_value=130.0,
+                baseline_mean=70.0,
+                baseline_stddev=5.0,
+                deviation_score=12.0,
+                severity="high",
+                status="new",
+                detected_at=now,
+            )
+        )
+        db_session.commit()
+
+        tools = tools_for(session_factory, db_session, keluarga_dengan_data["ayah"]["id"])
+        hasil = tools["get_anomaly_events"].invoke(
+            {"days": 30, "member_name": "Ibu"}
+        )
+        assert "130" in hasil
+
 
 # --- Profil ----------------------------------------------------------------
 
