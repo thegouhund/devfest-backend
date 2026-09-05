@@ -8,10 +8,17 @@ tidak ikut terbawa hanya karena ada di tabel.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_serializer,
+    field_validator,
+)
 
 
 # Batas wajar tubuh manusia. Nilai di luar ini hampir pasti salah input, dan
@@ -20,6 +27,19 @@ MIN_HEIGHT_CM, MAX_HEIGHT_CM = 30, 300
 MIN_WEIGHT_KG, MAX_WEIGHT_KG = 1, 500
 
 MIN_PASSWORD_LENGTH = 8
+
+
+def as_utc(value: datetime | None) -> datetime | None:
+    """Pastikan timestamp membawa penanda zona waktu.
+
+    Postgres mengembalikan datetime beserta zonanya, SQLite tidak. Tanpa
+    penyeragaman ini, response dari SQLite kehilangan akhiran `Z` dan
+    frontend menafsirkannya sebagai waktu lokal — jam yang ditampilkan
+    jadi meleset sesuai zona pengguna.
+    """
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 class HealthResponse(BaseModel):
@@ -76,6 +96,10 @@ class UserResponse(BaseModel):
     is_dependent: bool
     created_at: datetime
 
+    @field_serializer('created_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
 
 class FamilyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
@@ -101,6 +125,10 @@ class FamilyResponse(BaseModel):
     invite_code: str
     created_at: datetime
 
+    @field_serializer('created_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
 
 class FamilyMemberResponse(BaseModel):
     """Anggota family beserta identitasnya, digabung dari `users`."""
@@ -111,6 +139,10 @@ class FamilyMemberResponse(BaseModel):
     status: str
     is_dependent: bool
     joined_at: datetime
+
+    @field_serializer('joined_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
 
 
 class FamilyMemberListResponse(BaseModel):
@@ -141,6 +173,10 @@ class MeasurementSessionResponse(BaseModel):
     ended_at: datetime | None
     duration_seconds: int | None
 
+    @field_serializer('started_at', 'ended_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
 
 class MeasurementListResponse(BaseModel):
     sessions: list[MeasurementSessionResponse]
@@ -161,6 +197,56 @@ class MeasurementResultResponse(BaseModel):
     readings: list[ReadingResponse]
     # Wajib ditampilkan di layar hasil (PRD FR-1.6).
     disclaimer: str
+
+    @field_serializer('recorded_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+ACTIVITY_CATEGORIES = Literal[
+    "coffee", "exercise", "smoking", "alcohol", "sleep", "meal", "other"
+]
+
+
+class ActivityCreateRequest(BaseModel):
+    category: ACTIVITY_CATEGORIES
+    quantity: float | None = Field(default=None, ge=0)
+    unit: str | None = Field(default=None, max_length=32)
+    note: str | None = Field(default=None, max_length=1000)
+    occurred_at: datetime | None = None
+    # Diisi kalau mencatat untuk dependent yang dikelola.
+    user_id: uuid.UUID | None = None
+
+
+class ActivityUpdateRequest(BaseModel):
+    category: ACTIVITY_CATEGORIES | None = None
+    quantity: float | None = Field(default=None, ge=0)
+    unit: str | None = Field(default=None, max_length=32)
+    note: str | None = Field(default=None, max_length=1000)
+    occurred_at: datetime | None = None
+
+
+class ActivityResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    logged_by_user_id: uuid.UUID
+    category: str
+    quantity: float | None
+    unit: str | None
+    note: str | None
+    source: str
+    occurred_at: datetime
+
+    @field_serializer('occurred_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class ActivityListResponse(BaseModel):
+    activities: list[ActivityResponse]
+    total: int
 
 
 class TrendBucket(BaseModel):
@@ -215,6 +301,10 @@ class DashboardMemberResponse(BaseModel):
     last_measurement_at: datetime | None
     latest: list[ReadingResponse]
     open_anomalies: int
+
+    @field_serializer('last_measurement_at')
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
 
 
 class FamilyDashboardResponse(BaseModel):

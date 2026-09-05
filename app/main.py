@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.activities import router as activities_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.families import router as families_router
 from app.api.v1.health import router as health_router
@@ -69,3 +70,6 @@ app.include_router(
     measurements_router, prefix="/api/v1/measurements", tags=["measurements"]
 )
 app.include_router(vitals_router, prefix="/api/v1/vitals", tags=["vitals"])
+app.include_router(
+    activities_router, prefix="/api/v1/activities", tags=["activities"]
+)
