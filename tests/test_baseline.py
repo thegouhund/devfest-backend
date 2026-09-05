@@ -18,13 +18,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.db.models import Baseline, MeasurementSession, User, VitalsReading
+from app.db.models import Baseline, MeasurementSession, FamilyMember, VitalsReading
 from app.services.baseline import (
     MIN_SAMPLES_FOR_BASELINE,
     MIN_STDDEV,
     compute_baseline,
-    recompute_for_user,
+    recompute_for_profile,
 )
+from tests.conftest import make_account, make_profile_row
 
 
 @pytest.fixture
@@ -33,22 +34,21 @@ def now() -> datetime:
 
 
 @pytest.fixture
-def user(db_session) -> User:
-    person = User(full_name="Budi", email="budi@example.com")
-    db_session.add(person)
+def user(db_session) -> FamilyMember:
+    person = make_profile_row(db_session, full_name="Budi")
     db_session.commit()
     return person
 
 
 def add_readings(
     db,
-    user: User,
+    user: FamilyMember,
     values: list[tuple[datetime, float]],
     metric: str = "heart_rate",
 ) -> None:
     session = MeasurementSession(
-        user_id=user.id,
-        initiated_by_user_id=user.id,
+        family_member_id=user.id,
+        initiated_by_family_member_id=user.id,
         capture_method="upload",
         started_at=values[0][0],
         processing_status="completed",
@@ -59,7 +59,7 @@ def add_readings(
         db.add(
             VitalsReading(
                 measurement_session_id=session.id,
-                user_id=user.id,
+                family_member_id=user.id,
                 recorded_at=moment,
                 metric_type=metric,
                 value=value,
@@ -82,14 +82,14 @@ class TestColdStart:
         """Kurang dari 14 hari data: baseline tetap dihitung tapi belum
         dipakai untuk alert (PRD A3)."""
         add_readings(db_session, user, daily(now, [70.0] * 5))
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert baseline is not None
         assert baseline.is_active is False
 
     def test_sufficient_history_activates(self, db_session, user, now) -> None:
         add_readings(db_session, user, daily(now, [70 + i % 5 for i in range(20)]))
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert baseline.is_active is True
 
@@ -105,13 +105,13 @@ class TestColdStart:
         get_settings.cache_clear()
 
         add_readings(db_session, user, daily(now, [70.0, 72.0, 74.0, 71.0, 73.0]))
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert baseline.is_active is True
         get_settings.cache_clear()
 
     def test_no_readings_returns_none(self, db_session, user) -> None:
-        assert recompute_for_user(db_session, user.id, "heart_rate") is None
+        assert recompute_for_profile(db_session, user.id, "heart_rate") is None
 
 
 # --- Ketepatan hitungan ----------------------------------------------------
@@ -145,7 +145,7 @@ class TestStatisticalCorrectness:
         values = [60.0, 84.0, 72.0, 58.0, 86.0]
         add_readings(db_session, user, daily(now, values))
 
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert float(baseline.mean_value) == pytest.approx(py_statistics.mean(values))
         assert float(baseline.stddev_value) == pytest.approx(
@@ -154,7 +154,7 @@ class TestStatisticalCorrectness:
 
     def test_window_bounds_recorded(self, db_session, user, now) -> None:
         add_readings(db_session, user, daily(now, [70.0] * 5))
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert baseline.window_start < baseline.window_end
 
@@ -168,7 +168,7 @@ class TestDegenerateVariance:
         setiap pembacaan berikutnya jadi z-score tak hingga dan semuanya
         ditandai anomali."""
         add_readings(db_session, user, [(now, 72.0)])
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert float(baseline.stddev_value) >= MIN_STDDEV
 
@@ -177,7 +177,7 @@ class TestDegenerateVariance:
     ) -> None:
         """Nilai yang persis sama menghasilkan stdev nol — masalah yang sama."""
         add_readings(db_session, user, daily(now, [72.0] * 10))
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert float(baseline.stddev_value) >= MIN_STDDEV
 
@@ -216,14 +216,14 @@ class TestUpsert:
         """UNIQUE(user_id, metric_type, window_end): hitung ulang di window
         yang sama harus menimpa, bukan menambah baris."""
         add_readings(db_session, user, daily(now, [70.0] * 5))
-        recompute_for_user(db_session, user.id, "heart_rate", window_end=now)
+        recompute_for_profile(db_session, user.id, "heart_rate", window_end=now)
         db_session.commit()
-        recompute_for_user(db_session, user.id, "heart_rate", window_end=now)
+        recompute_for_profile(db_session, user.id, "heart_rate", window_end=now)
         db_session.commit()
 
         rows = (
             db_session.execute(
-                select(Baseline).where(Baseline.user_id == user.id)
+                select(Baseline).where(Baseline.family_member_id == user.id)
             )
             .scalars()
             .all()
@@ -235,12 +235,12 @@ class TestUpsert:
         add_readings(
             db_session, user, daily(now, [16.0] * 5), metric="respiration_rate"
         )
-        recompute_for_user(db_session, user.id, "heart_rate", window_end=now)
-        recompute_for_user(db_session, user.id, "respiration_rate", window_end=now)
+        recompute_for_profile(db_session, user.id, "heart_rate", window_end=now)
+        recompute_for_profile(db_session, user.id, "respiration_rate", window_end=now)
         db_session.commit()
 
         rows = (
-            db_session.execute(select(Baseline).where(Baseline.user_id == user.id))
+            db_session.execute(select(Baseline).where(Baseline.family_member_id == user.id))
             .scalars()
             .all()
         )
@@ -248,11 +248,11 @@ class TestUpsert:
 
     def test_recompute_updates_values(self, db_session, user, now) -> None:
         add_readings(db_session, user, [(now, 70.0)])
-        recompute_for_user(db_session, user.id, "heart_rate", window_end=now)
+        recompute_for_profile(db_session, user.id, "heart_rate", window_end=now)
         db_session.commit()
 
         add_readings(db_session, user, [(now - timedelta(hours=1), 90.0)])
-        baseline = recompute_for_user(db_session, user.id, "heart_rate", window_end=now)
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate", window_end=now)
         db_session.commit()
         assert float(baseline.mean_value) == pytest.approx(80.0)
 
@@ -263,14 +263,14 @@ class TestUpsert:
 class TestUserIsolation:
     def test_baseline_only_uses_own_readings(self, db_session, user, now) -> None:
         """Baseline personal: data orang lain tidak boleh ikut terhitung."""
-        other = User(full_name="Siti", email="siti@example.com")
+        other = make_profile_row(db_session, full_name="Siti")
         db_session.add(other)
         db_session.commit()
 
         add_readings(db_session, user, daily(now, [70.0] * 5))
         add_readings(db_session, other, daily(now, [120.0] * 5))
 
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert float(baseline.mean_value) == pytest.approx(70.0)
 
@@ -278,7 +278,7 @@ class TestUserIsolation:
         add_readings(db_session, user, daily(now, [70.0] * 5))
         add_readings(db_session, user, daily(now, [16.0] * 5), metric="respiration_rate")
 
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert float(baseline.mean_value) == pytest.approx(70.0)
 
@@ -293,7 +293,7 @@ class TestWindow:
         add_readings(db_session, user, [(now - timedelta(days=400), 120.0)])
         add_readings(db_session, user, daily(now, [70.0] * 5))
 
-        baseline = recompute_for_user(db_session, user.id, "heart_rate")
+        baseline = recompute_for_profile(db_session, user.id, "heart_rate")
         db_session.commit()
         assert float(baseline.mean_value) == pytest.approx(70.0)
 

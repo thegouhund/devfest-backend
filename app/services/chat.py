@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.chat.agent import build_agent
 from app.chat.llm import ChatUnavailable
-from app.db.models import ConversationLog, User
+from app.db.models import ConversationLog, FamilyMember
 from app.db.session import SessionLocal
 from app.services.conversation import (
     NotConversationOwner,
@@ -37,24 +37,28 @@ PESAN_GAGAL = (
 
 def ask(
     db: Session,
-    user: User,
+    profile: FamilyMember,
     message: str,
     conversation_id: uuid.UUID | None = None,
 ) -> tuple[str, ConversationLog]:
     """Jalankan satu giliran percakapan.
 
+    Percakapan melekat pada akun, tapi agent-nya bekerja atas nama profil
+    aktif — "detak jantung saya" harus merujuk orang yang sedang dipilih,
+    bukan seluruh keluarga.
+
     Mengembalikan `(balasan, percakapan)`. Melempar `ChatUnavailable` kalau
     penyedia AI tidak bisa dipakai, `LookupError` kalau percakapan tidak
-    ditemukan, dan `NotConversationOwner` kalau bukan milik pemanggil.
+    ditemukan, dan `NotConversationOwner` kalau bukan milik akun pemanggil.
 
     Pemanggil yang melakukan `commit`.
     """
-    conversation = _resolve_conversation(db, user, conversation_id)
-    riwayat = _load_history(db, conversation, user.id)
+    conversation = _resolve_conversation(db, profile, conversation_id)
+    riwayat = _load_history(db, conversation, profile.account_id)
 
     # Agent memakai session factory sendiri: tool dijalankan LangGraph di
     # thread pool, dan satu Session tidak aman dipakai lintas thread.
-    agent = build_agent(SessionLocal, user)
+    agent = build_agent(SessionLocal, profile)
 
     try:
         hasil = agent.invoke(
@@ -77,24 +81,24 @@ def ask(
 
 
 def _resolve_conversation(
-    db: Session, user: User, conversation_id: uuid.UUID | None
+    db: Session, profile: FamilyMember, conversation_id: uuid.UUID | None
 ) -> ConversationLog:
     """Ambil percakapan yang diminta, atau mulai yang baru."""
     if conversation_id is None:
-        return start_conversation(db, user.id)
+        return start_conversation(db, profile.account_id)
 
     conversation = db.get(ConversationLog, conversation_id)
     if conversation is None:
         raise LookupError("Percakapan tidak ditemukan")
 
-    if conversation.user_id != user.id:
+    if conversation.account_id != profile.account_id:
         raise NotConversationOwner("Percakapan ini bukan milik Anda")
 
     return conversation
 
 
 def _load_history(
-    db: Session, conversation: ConversationLog, viewer_id: uuid.UUID
+    db: Session, conversation: ConversationLog, viewer_account_id: uuid.UUID
 ) -> list:
     """Giliran sebelumnya, dalam bentuk yang dimengerti agent.
 
@@ -102,7 +106,7 @@ def _load_history(
     menyusunnya, user bisa memalsukan "jawaban bot" untuk menggiring model.
     """
     try:
-        pesan = get_history(db, conversation.id, viewer_id=viewer_id)
+        pesan = get_history(db, conversation.id, viewer_account_id=viewer_account_id)
     except (LookupError, NotConversationOwner):
         return []
 

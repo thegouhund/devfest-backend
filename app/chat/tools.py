@@ -23,12 +23,12 @@ from datetime import UTC, datetime, timedelta
 from langchain_core.tools import tool
 from sqlalchemy import select
 
-from app.db.models import Anomaly, User
+from app.db.models import Anomaly, FamilyMember
 from app.schemas import ACTIVITY_CATEGORIES
 from app.services import activity as activity_service
 from app.services import statistics
 from app.services.activity import NotAuthorisedToLog
-from app.services.visibility import accessible_user_ids
+from app.services.visibility import accessible_profile_ids
 
 
 # Kategori aktivitas yang dikenali (ERD §2.10), diambil dari schema supaya
@@ -55,7 +55,7 @@ def _format_quantity(quantity, unit: str | None) -> str:
     return f" {float(quantity):g} {unit or ''}".rstrip()
 
 
-def make_tools(session_factory, actor: User) -> list:
+def make_tools(session_factory, actor: FamilyMember) -> list:
     """Bangun perangkat tool untuk satu user.
 
     `actor` diikat lewat closure: seluruh pemeriksaan izin memakai identitas
@@ -76,9 +76,11 @@ def make_tools(session_factory, actor: User) -> list:
         if not member_name:
             return actor_id, None
 
-        visible = accessible_user_ids(db, actor_id, "vitals")
+        visible = accessible_profile_ids(db, actor_id, "vitals")
         kandidat = (
-            db.execute(select(User).where(User.id.in_(visible))).scalars().all()
+            db.execute(select(FamilyMember).where(FamilyMember.id.in_(visible)))
+            .scalars()
+            .all()
         )
 
         cocok = [
@@ -184,12 +186,12 @@ def make_tools(session_factory, actor: User) -> list:
             end = datetime.now(UTC)
             start = end - timedelta(days=_clamp_days(days))
 
-            visible = accessible_user_ids(db, actor_id, "vitals")
+            visible = accessible_profile_ids(db, actor_id, "vitals")
             rows = (
                 db.execute(
                     select(Anomaly)
                     .where(
-                        Anomaly.user_id.in_(visible),
+                        Anomaly.family_member_id.in_(visible),
                         Anomaly.detected_at >= start,
                         Anomaly.detected_at <= end,
                     )
@@ -232,7 +234,7 @@ def make_tools(session_factory, actor: User) -> list:
                     f"Pilih salah satu: {pilihan}."
                 )
 
-            actor_row = db.get(User, actor_id)
+            actor_row = db.get(FamilyMember, actor_id)
             try:
                 activity_service.create_activity(
                     db,
@@ -261,7 +263,7 @@ def make_tools(session_factory, actor: User) -> list:
         sign, misalnya saat membahas rentang normal."""
         db = session_factory()
         try:
-            user = db.get(User, actor_id)
+            user = db.get(FamilyMember, actor_id)
             if user is None:
                 return "Profil tidak ditemukan."
 

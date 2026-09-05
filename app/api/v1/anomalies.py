@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
-from app.db.models import ActivityLog, Anomaly, User
+from app.core.security import get_current_profile
+from app.db.models import ActivityLog, Anomaly, FamilyMember
 from app.db.session import get_db
 from app.schemas import (
     AnomalyDetailResponse,
@@ -19,7 +19,7 @@ from app.schemas import (
     AnomalyUpdateRequest,
     RelatedActivityResponse,
 )
-from app.services.visibility import accessible_user_ids
+from app.services.visibility import accessible_profile_ids, same_account
 
 
 router = APIRouter()
@@ -33,23 +33,23 @@ VISIBILITY_SCOPE = "vitals"
 
 
 def _visible_scope(
-    db: Session, viewer: User, user_id: uuid.UUID | None
+    db: Session, viewer: FamilyMember, family_member_id: uuid.UUID | None
 ) -> set[uuid.UUID]:
-    visible = accessible_user_ids(db, viewer.id, VISIBILITY_SCOPE)
+    visible = accessible_profile_ids(db, viewer.id, VISIBILITY_SCOPE)
 
-    if user_id is None:
+    if family_member_id is None:
         return visible
 
-    if user_id not in visible:
+    if family_member_id not in visible:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anda tidak punya akses ke data user ini",
         )
-    return {user_id}
+    return {family_member_id}
 
 
 def _get_visible_anomaly(
-    db: Session, anomaly_id: uuid.UUID, viewer: User
+    db: Session, anomaly_id: uuid.UUID, viewer: FamilyMember
 ) -> Anomaly:
     anomaly = db.get(Anomaly, anomaly_id)
     if anomaly is None:
@@ -57,7 +57,7 @@ def _get_visible_anomaly(
             status_code=status.HTTP_404_NOT_FOUND, detail="Anomali tidak ditemukan"
         )
 
-    if anomaly.user_id not in accessible_user_ids(db, viewer.id, VISIBILITY_SCOPE):
+    if anomaly.family_member_id not in accessible_profile_ids(db, viewer.id, VISIBILITY_SCOPE):
         # 404, bukan 403: keberadaan anomali orang lain pun bukan informasi
         # publik.
         raise HTTPException(
@@ -70,17 +70,17 @@ def _get_visible_anomaly(
 def list_anomalies(
     status_filter: str | None = Query(default=None, alias="status"),
     metric_type: str | None = Query(default=None),
-    user_id: uuid.UUID | None = Query(default=None),
+    family_member_id: uuid.UUID | None = Query(default=None),
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> AnomalyListResponse:
-    scope = _visible_scope(db, current_user, user_id)
+    scope = _visible_scope(db, current_profile, family_member_id)
 
-    conditions = [Anomaly.user_id.in_(scope)]
+    conditions = [Anomaly.family_member_id.in_(scope)]
     if status_filter:
         conditions.append(Anomaly.status == status_filter)
     if metric_type:
@@ -114,11 +114,11 @@ def list_anomalies(
 @router.get("/{anomaly_id}", response_model=AnomalyDetailResponse)
 def read_anomaly(
     anomaly_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> AnomalyDetailResponse:
     """Detail anomali beserta konteks penyebabnya (FR-3.3)."""
-    anomaly = _get_visible_anomaly(db, anomaly_id, current_user)
+    anomaly = _get_visible_anomaly(db, anomaly_id, current_profile)
 
     activity = None
     if anomaly.related_activity_id is not None:
@@ -137,7 +137,7 @@ def read_anomaly(
 def update_anomaly_status(
     anomaly_id: uuid.UUID,
     payload: AnomalyUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> Anomaly:
     """Tandai anomali sudah dibaca atau diabaikan.
@@ -145,9 +145,9 @@ def update_anomaly_status(
     Hanya subjeknya atau admin yang mengelolanya — boleh melihat tidak
     berarti boleh menandai sudah dibaca atas nama orang lain.
     """
-    anomaly = _get_visible_anomaly(db, anomaly_id, current_user)
+    anomaly = _get_visible_anomaly(db, anomaly_id, current_profile)
 
-    if not _may_change_status(db, anomaly, current_user):
+    if not _may_change_status(db, anomaly, current_profile):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya pemilik data atau pengelolanya yang bisa mengubah status",
@@ -159,8 +159,12 @@ def update_anomaly_status(
     return anomaly
 
 
-def _may_change_status(db: Session, anomaly: Anomaly, actor: User) -> bool:
-    if anomaly.user_id == actor.id:
+def _may_change_status(db: Session, anomaly: Anomaly, actor: FamilyMember) -> bool:
+    """Menutup anomali adalah keputusan medis kecil, jadi dibatasi ke
+    subjeknya sendiri atau admin akun — bukan setiap anggota yang kebetulan
+    bisa melihatnya."""
+    if anomaly.family_member_id == actor.id:
         return True
-    subject = db.get(User, anomaly.user_id)
-    return subject is not None and subject.managed_by_user_id == actor.id
+    return actor.role == "admin" and same_account(
+        db, actor.id, anomaly.family_member_id
+    )

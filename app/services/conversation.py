@@ -29,9 +29,9 @@ class NotConversationOwner(PermissionError):
 VALID_ROLES = ("user", "assistant", "system", "tool")
 
 
-def start_conversation(db: Session, user_id: uuid.UUID) -> ConversationLog:
+def start_conversation(db: Session, account_id: uuid.UUID) -> ConversationLog:
     """Mulai sesi chat baru. Pemanggil yang melakukan `commit`."""
-    conversation = ConversationLog(user_id=user_id, started_at=datetime.now(UTC))
+    conversation = ConversationLog(account_id=account_id, started_at=datetime.now(UTC))
     db.add(conversation)
     db.flush()
     return conversation
@@ -99,20 +99,20 @@ def end_conversation(
 
 
 def get_history(
-    db: Session, conversation_id: uuid.UUID, viewer_id: uuid.UUID
+    db: Session, conversation_id: uuid.UUID, viewer_account_id: uuid.UUID
 ) -> list[ConversationMessage]:
     """Seluruh pesan dalam satu percakapan, terurut.
 
     Melempar `LookupError` kalau percakapan tidak ada, atau
-    `NotConversationOwner` kalau pemanggil bukan pemiliknya — termasuk
-    admin yang mengelola dependent, karena isi chat tidak punya jalur
-    berbagi.
+    `NotConversationOwner` kalau bukan milik akun pemanggil. Percakapan
+    melekat pada akun, bukan profil: chat dibuka dari sesi login, dan
+    tidak ada jalur berbagi isi chat antar akun.
     """
     conversation = db.get(ConversationLog, conversation_id)
     if conversation is None:
         raise LookupError("Percakapan tidak ditemukan")
 
-    if conversation.user_id != viewer_id:
+    if conversation.account_id != viewer_account_id:
         raise NotConversationOwner("Percakapan ini bukan milik Anda")
 
     return (
@@ -127,13 +127,13 @@ def get_history(
 
 
 def list_conversations(
-    db: Session, user_id: uuid.UUID, limit: int = 50
+    db: Session, account_id: uuid.UUID, limit: int = 50
 ) -> list[ConversationLog]:
     """Daftar sesi chat milik user, terbaru lebih dulu."""
     return (
         db.execute(
             select(ConversationLog)
-            .where(ConversationLog.user_id == user_id)
+            .where(ConversationLog.account_id == account_id)
             .order_by(ConversationLog.started_at.desc())
             .limit(limit)
         )

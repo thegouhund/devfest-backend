@@ -8,8 +8,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
-from app.db.models import User
+from app.core.security import get_current_profile
+from app.db.models import FamilyMember
 from app.db.session import get_db
 from app.schemas import (
     ActivityCreateRequest,
@@ -31,14 +31,14 @@ SOURCE_MENU = "menu"
 @router.post("", response_model=ActivityResponse, status_code=status.HTTP_201_CREATED)
 def create_activity(
     payload: ActivityCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> ActivityResponse:
     try:
         activity = activity_service.create_activity(
             db,
-            actor=current_user,
-            subject_id=payload.user_id,
+            actor=current_profile,
+            subject_id=payload.family_member_id,
             category=payload.category,
             quantity=payload.quantity,
             unit=payload.unit,
@@ -61,21 +61,21 @@ def list_activities(
     category: str | None = Query(default=None),
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
-    user_id: uuid.UUID | None = Query(default=None),
+    family_member_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(
         default=activity_service.DEFAULT_PAGE_SIZE,
         ge=1,
         le=activity_service.MAX_PAGE_SIZE,
     ),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> ActivityListResponse:
     try:
         rows, total = activity_service.list_activities(
             db,
-            viewer_id=current_user.id,
-            subject_id=user_id,
+            viewer_id=current_profile.id,
+            subject_id=family_member_id,
             category=category,
             start=start,
             end=end,
@@ -93,10 +93,10 @@ def list_activities(
 
 
 def _load_editable(
-    db: Session, activity_id: uuid.UUID, current_user: User
+    db: Session, activity_id: uuid.UUID, current_profile: FamilyMember
 ):
     try:
-        return activity_service.get_editable_activity(db, activity_id, current_user)
+        return activity_service.get_editable_activity(db, activity_id, current_profile)
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -111,10 +111,10 @@ def _load_editable(
 def update_activity(
     activity_id: uuid.UUID,
     payload: ActivityUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> ActivityResponse:
-    activity = _load_editable(db, activity_id, current_user)
+    activity = _load_editable(db, activity_id, current_profile)
 
     # exclude_unset supaya field yang tidak dikirim tetap seperti semula.
     activity_service.update_activity(
@@ -128,10 +128,10 @@ def update_activity(
 @router.delete("/{activity_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_activity(
     activity_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> Response:
-    activity = _load_editable(db, activity_id, current_user)
+    activity = _load_editable(db, activity_id, current_profile)
     activity_service.delete_activity(db, activity)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

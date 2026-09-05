@@ -1,7 +1,7 @@
 """Task 16: endpoint anomali (daftar, detail, tandai).
 
 Acceptance criteria under test:
-- Listing menghormati accessible_user_ids
+- Listing menghormati accessible_profile_ids
 - Detail memuat perbandingan baseline dan aktivitas terkait bila ada
 - Transisi status terbatas: new -> acknowledged | dismissed
 - Anggota lain tidak bisa mengubah status yang bukan miliknya
@@ -15,22 +15,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.db.models import ActivityLog, Anomaly, MeasurementSession, User
+from app.db.models import ActivityLog, Anomaly, MeasurementSession, FamilyMember
 
 
 ANOMALIES = "/api/v1/anomalies"
-FAMILIES = "/api/v1/families"
-
-
-def register(client, email: str, name: str) -> dict:
-    response = client.post(
-        "/api/v1/auth/register",
-        json={"email": email, "password": "rahasia-kuat-123", "full_name": name},
-    )
-    assert response.status_code == 201, response.text
-    headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
-    user_id = client.get("/api/v1/users/me", headers=headers).json()["id"]
-    return {"headers": headers, "id": uuid.UUID(user_id)}
 
 
 @pytest.fixture
@@ -38,38 +26,9 @@ def now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
 
-@pytest.fixture
-def keluarga(client):
-    ayah = register(client, "ayah@x.com", "Ayah")
-    ibu = register(client, "ibu@x.com", "Ibu")
-    luar = register(client, "luar@x.com", "Orang Luar")
-
-    family = client.post(
-        FAMILIES, json={"name": "Keluarga"}, headers=ayah["headers"]
-    ).json()
-    client.post(
-        f"{FAMILIES}/join",
-        json={"invite_code": family["invite_code"]},
-        headers=ibu["headers"],
-    )
-    anak = client.post(
-        f"{FAMILIES}/{family['id']}/dependents",
-        json={"full_name": "Anak"},
-        headers=ayah["headers"],
-    ).json()
-
-    return {
-        "family": family,
-        "ayah": ayah,
-        "ibu": ibu,
-        "luar": luar,
-        "anak": {"id": uuid.UUID(anak["id"])},
-    }
-
-
-def make_anomaly(db, user_id: uuid.UUID, now: datetime, **overrides) -> Anomaly:
+def make_anomaly(db, family_member_id: uuid.UUID, now: datetime, **overrides) -> Anomaly:
     anomaly = Anomaly(
-        user_id=user_id,
+        family_member_id=family_member_id,
         metric_type=overrides.pop("metric_type", "heart_rate"),
         observed_value=overrides.pop("observed_value", 98.5),
         baseline_mean=70.8,
@@ -101,7 +60,7 @@ class TestList:
         ][0]
         assert {
             "id",
-            "user_id",
+            "family_member_id",
             "metric_type",
             "observed_value",
             "baseline_mean",
@@ -182,7 +141,7 @@ class TestListVisibility:
     ) -> None:
         make_anomaly(db_session, keluarga["ayah"]["id"], now)
         body = client.get(
-            f"{ANOMALIES}?user_id={keluarga['ayah']['id']}",
+            f"{ANOMALIES}?family_member_id={keluarga['ayah']['id']}",
             headers=keluarga["ibu"]["headers"],
         ).json()
         assert body["total"] == 1
@@ -199,7 +158,7 @@ class TestListVisibility:
             headers=keluarga["ayah"]["headers"],
         )
         response = client.get(
-            f"{ANOMALIES}?user_id={keluarga['ayah']['id']}",
+            f"{ANOMALIES}?family_member_id={keluarga['ayah']['id']}",
             headers=keluarga["ibu"]["headers"],
         )
         assert response.status_code == 403
@@ -207,7 +166,7 @@ class TestListVisibility:
     def test_outsider_forbidden(self, client, keluarga, db_session, now) -> None:
         make_anomaly(db_session, keluarga["ayah"]["id"], now)
         response = client.get(
-            f"{ANOMALIES}?user_id={keluarga['ayah']['id']}",
+            f"{ANOMALIES}?family_member_id={keluarga['ayah']['id']}",
             headers=keluarga["luar"]["headers"],
         )
         assert response.status_code == 403
@@ -246,8 +205,8 @@ class TestDetail:
     ) -> None:
         """Konteks penyebab (FR-3.3) supaya user tahu kemungkinan pemicunya."""
         activity = ActivityLog(
-            user_id=keluarga["ayah"]["id"],
-            logged_by_user_id=keluarga["ayah"]["id"],
+            family_member_id=keluarga["ayah"]["id"],
+            logged_by_family_member_id=keluarga["ayah"]["id"],
             category="coffee",
             quantity=3,
             unit="cups",
@@ -277,8 +236,8 @@ class TestDetail:
 
     def test_includes_session_id(self, client, keluarga, db_session, now) -> None:
         session = MeasurementSession(
-            user_id=keluarga["ayah"]["id"],
-            initiated_by_user_id=keluarga["ayah"]["id"],
+            family_member_id=keluarga["ayah"]["id"],
+            initiated_by_family_member_id=keluarga["ayah"]["id"],
             capture_method="upload",
             started_at=now,
             processing_status="completed",
@@ -403,7 +362,7 @@ class TestDashboardCount:
         make_anomaly(db_session, keluarga["ayah"]["id"], now, status="dismissed")
 
         members = client.get(
-            f"{FAMILIES}/{keluarga['family']['id']}/dashboard",
+            "/api/v1/profiles/dashboard/family",
             headers=keluarga["ayah"]["headers"],
         ).json()["members"]
         ayah = next(m for m in members if m["full_name"] == "Ayah")

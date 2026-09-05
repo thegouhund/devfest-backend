@@ -18,8 +18,8 @@ from fastapi import (
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
-from app.db.models import MeasurementSession, User, VitalsReading
+from app.core.security import get_current_profile
+from app.db.models import MeasurementSession, FamilyMember, VitalsReading
 from app.db.session import get_db
 from app.schemas import (
     MeasurementAcceptedResponse,
@@ -36,7 +36,7 @@ from app.services.measurement import (
     resolve_subject,
 )
 from app.services.video_storage import VideoValidationError
-from app.services.visibility import accessible_user_ids
+from app.services.visibility import accessible_profile_ids
 
 
 router = APIRouter()
@@ -62,7 +62,7 @@ def _background_session(db: Session) -> Session | None:
 def _start_measurement(
     db: Session,
     background_tasks: BackgroundTasks,
-    actor: User,
+    actor: FamilyMember,
     subject_id: uuid.UUID | None,
     capture_method: str,
     file: UploadFile,
@@ -103,13 +103,13 @@ def _start_measurement(
 def upload_measurement(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: uuid.UUID | None = Form(default=None),
-    current_user: User = Depends(get_current_user),
+    family_member_id: uuid.UUID | None = Form(default=None),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> MeasurementAcceptedResponse:
     """Unggah video wajah yang sudah direkam (FR-1.2)."""
     return _start_measurement(
-        db, background_tasks, current_user, user_id, "upload", file
+        db, background_tasks, current_profile, family_member_id, "upload", file
     )
 
 
@@ -121,8 +121,8 @@ def upload_measurement(
 def live_measurement(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: uuid.UUID | None = Form(default=None),
-    current_user: User = Depends(get_current_user),
+    family_member_id: uuid.UUID | None = Form(default=None),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> MeasurementAcceptedResponse:
     """Kirim hasil rekaman live dari browser (FR-1.1).
@@ -130,11 +130,11 @@ def live_measurement(
     Bedanya dengan `/upload` hanya `capture_method`, supaya sumber rekaman
     tetap terlacak untuk analisis kualitas nanti.
     """
-    return _start_measurement(db, background_tasks, current_user, user_id, "live", file)
+    return _start_measurement(db, background_tasks, current_profile, family_member_id, "live", file)
 
 
 def _get_visible_session(
-    db: Session, session_id: uuid.UUID, viewer: User
+    db: Session, session_id: uuid.UUID, viewer: FamilyMember
 ) -> MeasurementSession:
     session = db.get(MeasurementSession, session_id)
     if session is None:
@@ -142,7 +142,7 @@ def _get_visible_session(
             status_code=status.HTTP_404_NOT_FOUND, detail="Sesi tidak ditemukan"
         )
 
-    if session.user_id not in accessible_user_ids(db, viewer.id, "vitals"):
+    if session.family_member_id not in accessible_profile_ids(db, viewer.id, "vitals"):
         # 404, bukan 403: keberadaan sesi orang lain pun bukan informasi publik.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Sesi tidak ditemukan"
@@ -152,16 +152,16 @@ def _get_visible_session(
 
 @router.get("", response_model=MeasurementListResponse)
 def list_measurements(
-    user_id: uuid.UUID | None = Query(default=None),
+    family_member_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> MeasurementListResponse:
-    visible = accessible_user_ids(db, current_user.id, "vitals")
+    visible = accessible_profile_ids(db, current_profile.id, "vitals")
 
-    if user_id is not None:
-        if user_id not in visible:
+    if family_member_id is not None:
+        if family_member_id not in visible:
             # 403 utuh, bukan 200 dengan daftar kosong: daftar kosong
             # terbaca "orang ini belum pernah mengukur", padahal jawaban
             # sebenarnya "Anda tidak berhak tahu". Disamakan dengan
@@ -170,9 +170,9 @@ def list_measurements(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Anda tidak punya akses ke data user ini",
             )
-        visible = {user_id}
+        visible = {family_member_id}
 
-    condition = MeasurementSession.user_id.in_(visible)
+    condition = MeasurementSession.family_member_id.in_(visible)
     total = db.execute(
         select(func.count()).select_from(MeasurementSession).where(condition)
     ).scalar_one()
@@ -198,19 +198,19 @@ def list_measurements(
 @router.get("/{session_id}", response_model=MeasurementSessionResponse)
 def read_measurement(
     session_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> MeasurementSession:
-    return _get_visible_session(db, session_id, current_user)
+    return _get_visible_session(db, session_id, current_profile)
 
 
 @router.get("/{session_id}/results", response_model=MeasurementResultResponse)
 def read_measurement_results(
     session_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> MeasurementResultResponse:
-    session = _get_visible_session(db, session_id, current_user)
+    session = _get_visible_session(db, session_id, current_profile)
 
     if session.processing_status != "completed":
         # Bukan 200 dengan array kosong: itu terbaca seolah pengukurannya

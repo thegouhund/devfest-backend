@@ -9,8 +9,8 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
-from app.db.models import User
+from app.core.security import get_current_profile
+from app.db.models import FamilyMember
 from app.db.session import get_db
 from app.schemas import (
     BaselineSummary,
@@ -22,7 +22,7 @@ from app.schemas import (
     TrendResponse,
 )
 from app.services import statistics
-from app.services.visibility import accessible_user_ids
+from app.services.visibility import accessible_profile_ids
 
 
 router = APIRouter()
@@ -33,25 +33,25 @@ SUMMARY_METRICS = ("heart_rate", "hrv_rmssd", "respiration_rate")
 
 
 def _resolve_scope(
-    db: Session, viewer: User, user_id: uuid.UUID | None
+    db: Session, viewer: FamilyMember, family_member_id: uuid.UUID | None
 ) -> set[uuid.UUID]:
     """Tentukan user mana yang datanya boleh diagregasi.
 
-    Tanpa `user_id`, lingkupnya diri sendiri. Dengan `user_id`, aksesnya
+    Tanpa `family_member_id`, lingkupnya diri sendiri. Dengan `family_member_id`, aksesnya
     diperiksa dulu — meminta data yang tidak boleh dilihat menghasilkan 403
     utuh, bukan hasil kosong yang terbaca seolah orangnya belum mengukur.
     """
-    visible = accessible_user_ids(db, viewer.id, "vitals")
+    visible = accessible_profile_ids(db, viewer.id, "vitals")
 
-    if user_id is None:
+    if family_member_id is None:
         return {viewer.id}
 
-    if user_id not in visible:
+    if family_member_id not in visible:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anda tidak punya akses ke data user ini",
         )
-    return {user_id}
+    return {family_member_id}
 
 
 def _validate_range(start: datetime, end: datetime) -> None:
@@ -76,8 +76,8 @@ def read_trend(
     start: datetime = Query(...),
     end: datetime = Query(...),
     bucket: Literal["day", "week", "month"] = Query(default="day"),
-    user_id: uuid.UUID | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    family_member_id: uuid.UUID | None = Query(default=None),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> TrendResponse:
     """Tren satu metrik dalam rentang waktu (FR-2.1).
@@ -86,7 +86,7 @@ def read_trend(
     """
     _validate_metric(db, metric_type)
     _validate_range(start, end)
-    scope = _resolve_scope(db, current_user, user_id)
+    scope = _resolve_scope(db, current_profile, family_member_id)
 
     buckets = statistics.trend(db, scope, metric_type, start, end, bucket)
 
@@ -101,14 +101,14 @@ def read_trend(
 def read_summary(
     start: datetime = Query(...),
     end: datetime = Query(...),
-    user_id: uuid.UUID | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    family_member_id: uuid.UUID | None = Query(default=None),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> SummaryResponse:
     """Ringkasan seluruh metrik: rata-rata, min/maks, baseline, dan
     perbandingan dengan periode sebelumnya (FR-2.2)."""
     _validate_range(start, end)
-    scope = _resolve_scope(db, current_user, user_id)
+    scope = _resolve_scope(db, current_profile, family_member_id)
     subject_id = next(iter(scope))
 
     previous_start, previous_end = statistics.previous_period(start, end)

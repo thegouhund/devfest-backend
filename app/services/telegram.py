@@ -43,18 +43,18 @@ def generate_link_code() -> str:
     return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
 
 
-def issue_link_code(db: Session, user_id: uuid.UUID) -> TelegramLink:
+def issue_link_code(db: Session, account_id: uuid.UUID) -> TelegramLink:
     """Terbitkan kode linking baru untuk seorang user.
 
     Menimpa kode sebelumnya kalau ada, supaya tidak ada dua kode aktif
     sekaligus. Pemanggil yang melakukan `commit`.
     """
     link = db.execute(
-        select(TelegramLink).where(TelegramLink.user_id == user_id)
+        select(TelegramLink).where(TelegramLink.account_id == account_id)
     ).scalar_one_or_none()
 
     if link is None:
-        link = TelegramLink(user_id=user_id)
+        link = TelegramLink(account_id=account_id)
         db.add(link)
 
     link.link_code = generate_link_code()
@@ -97,7 +97,7 @@ def consume_link_code(db: Session, code: str, chat_id: str) -> TelegramLink:
     return link
 
 
-def active_link(db: Session, user_id: uuid.UUID) -> TelegramLink | None:
+def active_link(db: Session, account_id: uuid.UUID) -> TelegramLink | None:
     """Sambungan aktif milik user, atau None kalau belum tersambung.
 
     Kode yang sudah diterbitkan tapi belum ditukarkan tidak dihitung
@@ -105,7 +105,7 @@ def active_link(db: Session, user_id: uuid.UUID) -> TelegramLink | None:
     """
     link = db.execute(
         select(TelegramLink).where(
-            TelegramLink.user_id == user_id,
+            TelegramLink.account_id == account_id,
             TelegramLink.telegram_chat_id.isnot(None),
             TelegramLink.is_active.is_(True),
         )
@@ -113,10 +113,10 @@ def active_link(db: Session, user_id: uuid.UUID) -> TelegramLink | None:
     return link
 
 
-def unlink(db: Session, user_id: uuid.UUID) -> None:
+def unlink(db: Session, account_id: uuid.UUID) -> None:
     """Putuskan sambungan. Pemanggil yang melakukan `commit`."""
     link = db.execute(
-        select(TelegramLink).where(TelegramLink.user_id == user_id)
+        select(TelegramLink).where(TelegramLink.account_id == account_id)
     ).scalar_one_or_none()
     if link is not None:
         db.delete(link)

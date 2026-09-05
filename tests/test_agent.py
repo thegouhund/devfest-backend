@@ -13,6 +13,7 @@ import pytest
 
 from app.chat.agent import SYSTEM_PROMPT, build_agent
 from app.chat.llm import ChatUnavailable, get_chat_model
+from tests.conftest import make_account, make_profile_row
 
 
 @pytest.fixture
@@ -104,9 +105,9 @@ class TestMedicalGuardrails:
 
 class TestBuildAgent:
     def test_builds_with_tools(self, api_key, db_session) -> None:
-        from app.db.models import User
+        from app.db.models import FamilyMember
 
-        user = User(full_name="Budi", email="budi@example.com")
+        user = make_profile_row(db_session, full_name="Budi")
         db_session.add(user)
         db_session.commit()
 
@@ -115,13 +116,13 @@ class TestBuildAgent:
 
     def test_requires_api_key(self, monkeypatch: pytest.MonkeyPatch, db_session) -> None:
         from app.core.config import get_settings
-        from app.db.models import User
+        from app.db.models import FamilyMember
 
         monkeypatch.setenv("DEEPSEEK_API_KEY", "")
         monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
         get_settings.cache_clear()
 
-        user = User(full_name="Budi", email="budi@example.com")
+        user = make_profile_row(db_session, full_name="Budi")
         db_session.add(user)
         db_session.commit()
 

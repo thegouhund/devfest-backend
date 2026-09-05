@@ -77,23 +77,17 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-# --- User ------------------------------------------------------------------
+# --- Akun & profil ---------------------------------------------------------
 
 
-class UserResponse(BaseModel):
-    """Bentuk publik profil user. `password_hash` sengaja tidak ada di sini."""
+class AccountResponse(BaseModel):
+    """Bentuk publik akun. `password_hash` sengaja tidak ada di sini."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    email: str | None
+    email: str
     phone: str | None
-    full_name: str
-    date_of_birth: date | None
-    gender: str | None
-    height_cm: float | None
-    weight: float | None
-    is_dependent: bool
     created_at: datetime
 
     @field_serializer('created_at')
@@ -101,28 +95,64 @@ class UserResponse(BaseModel):
         return as_utc(value)
 
 
-class FamilyCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=160)
+class ProfileCreateRequest(BaseModel):
+    """Profil anggota keluarga yang dibuat admin.
 
-    @field_validator("name")
+    Tidak ada email dan password: anggota tidak login sendiri, seluruh
+    keluarga berbagi satu akun (ERD §0). PIN opsional untuk profil yang
+    ingin dikunci.
+    """
+
+    full_name: str = Field(min_length=1, max_length=160)
+    date_of_birth: date | None = None
+    gender: str | None = None
+    relationship_label: str | None = Field(default=None, max_length=60)
+    height_cm: float | None = Field(default=None, ge=MIN_HEIGHT_CM, le=MAX_HEIGHT_CM)
+    weight: float | None = Field(default=None, ge=MIN_WEIGHT_KG, le=MAX_WEIGHT_KG)
+    ui_mode: Literal["standard", "elderly"] = "standard"
+    pin: str | None = Field(default=None, min_length=4, max_length=12)
+
+    @field_validator("full_name")
     @classmethod
     def strip_name(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
-            raise ValueError("name tidak boleh kosong")
+            raise ValueError("full_name tidak boleh kosong")
         return stripped
 
 
-class FamilyJoinRequest(BaseModel):
-    invite_code: str = Field(min_length=1, max_length=64)
+class ProfileUpdateRequest(BaseModel):
+    """Field profil yang boleh diubah.
+
+    `account_id` dan `role` tidak ada di sini: memindahkan profil antar akun
+    atau menaikkan diri jadi admin bukan operasi edit profil.
+    """
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=160)
+    date_of_birth: date | None = None
+    gender: str | None = None
+    relationship_label: str | None = Field(default=None, max_length=60)
+    height_cm: float | None = Field(default=None, ge=MIN_HEIGHT_CM, le=MAX_HEIGHT_CM)
+    weight: float | None = Field(default=None, ge=MIN_WEIGHT_KG, le=MAX_WEIGHT_KG)
+    ui_mode: Literal["standard", "elderly"] | None = None
 
 
-class FamilyResponse(BaseModel):
+class ProfileResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    name: str
-    invite_code: str
+    full_name: str
+    date_of_birth: date | None
+    gender: str | None
+    relationship_label: str | None
+    height_cm: float | None
+    weight: float | None
+    role: str
+    ui_mode: str
+    is_active: bool
+    # Bukan PIN-nya, hanya penanda terkunci — frontend perlu tahu kapan
+    # harus meminta PIN, tapi hash-nya tidak boleh keluar.
+    has_pin: bool
     created_at: datetime
 
     @field_serializer('created_at')
@@ -130,27 +160,15 @@ class FamilyResponse(BaseModel):
         return as_utc(value)
 
 
-class FamilyMemberResponse(BaseModel):
-    """Anggota family beserta identitasnya, digabung dari `users`."""
-
-    user_id: uuid.UUID
-    full_name: str
-    role: str
-    status: str
-    is_dependent: bool
-    joined_at: datetime
-
-    @field_serializer('joined_at')
-    def _utc(self, value: datetime | None) -> datetime | None:
-        return as_utc(value)
+class ProfileListResponse(BaseModel):
+    profiles: list[ProfileResponse]
 
 
-class FamilyMemberListResponse(BaseModel):
-    members: list[FamilyMemberResponse]
+class ProfileSelectRequest(BaseModel):
+    """Pilih profil aktif; PIN wajib kalau profilnya terkunci."""
 
-
-class FamilyMemberUpdateRequest(BaseModel):
-    role: Literal["admin", "member"]
+    profile_id: uuid.UUID
+    pin: str | None = Field(default=None, min_length=4, max_length=12)
 
 
 class MeasurementAcceptedResponse(BaseModel):
@@ -164,7 +182,7 @@ class MeasurementSessionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    user_id: uuid.UUID
+    family_member_id: uuid.UUID
     capture_method: str
     processing_status: str
     signal_quality_flag: str | None
@@ -224,7 +242,7 @@ class AnomalyResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    user_id: uuid.UUID
+    family_member_id: uuid.UUID
     metric_type: str
     observed_value: float
     baseline_mean: float
@@ -343,8 +361,8 @@ class ActivityCreateRequest(BaseModel):
     unit: str | None = Field(default=None, max_length=32)
     note: str | None = Field(default=None, max_length=1000)
     occurred_at: datetime | None = None
-    # Diisi kalau mencatat untuk dependent yang dikelola.
-    user_id: uuid.UUID | None = None
+    # Diisi kalau mencatat untuk profil lain dalam akun yang sama.
+    family_member_id: uuid.UUID | None = None
 
 
 class ActivityUpdateRequest(BaseModel):
@@ -359,8 +377,8 @@ class ActivityResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    user_id: uuid.UUID
-    logged_by_user_id: uuid.UUID
+    family_member_id: uuid.UUID
+    logged_by_family_member_id: uuid.UUID
     category: str
     quantity: float | None
     unit: str | None
@@ -425,7 +443,7 @@ class SummaryResponse(BaseModel):
 
 
 class DashboardMemberResponse(BaseModel):
-    user_id: uuid.UUID
+    family_member_id: uuid.UUID
     full_name: str
     last_measurement_at: datetime | None
     latest: list[ReadingResponse]
@@ -436,30 +454,8 @@ class DashboardMemberResponse(BaseModel):
         return as_utc(value)
 
 
-class FamilyDashboardResponse(BaseModel):
+class AccountDashboardResponse(BaseModel):
     members: list[DashboardMemberResponse]
-
-
-class DependentCreateRequest(BaseModel):
-    """Profil anggota keluarga yang tidak punya akun sendiri (anak/lansia).
-
-    Tidak ada email maupun password — dependent tidak pernah login,
-    profilnya dikelola admin family (ERD §2.1).
-    """
-
-    full_name: str = Field(min_length=1, max_length=160)
-    date_of_birth: date | None = None
-    gender: str | None = Field(default=None, max_length=32)
-    height_cm: float | None = Field(default=None, gt=MIN_HEIGHT_CM, lt=MAX_HEIGHT_CM)
-    weight: float | None = Field(default=None, gt=MIN_WEIGHT_KG, lt=MAX_WEIGHT_KG)
-
-    @field_validator("full_name")
-    @classmethod
-    def strip_name(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("full_name tidak boleh kosong")
-        return stripped
 
 
 class VisibilitySettingResponse(BaseModel):
@@ -476,29 +472,12 @@ class VisibilityUpdateRequest(BaseModel):
     visibility: Literal["family", "private"]
 
 
-class UserUpdateRequest(BaseModel):
-    """Field yang boleh diubah user sendiri.
+class AccountUpdateRequest(BaseModel):
+    """Field akun yang boleh diubah.
 
-    `email`, `is_active`, `is_dependent`, dan `managed_by_user_id` sengaja
-    tidak ada — mengubahnya lewat endpoint profil berarti user bisa
-    mengambil alih identitas atau status akun orang lain.
+    `email`, `password_hash`, dan `is_active` sengaja tidak ada — mengganti
+    email atau menonaktifkan akun lewat endpoint ini berarti pengambilalihan
+    identitas tanpa verifikasi ulang.
     """
 
-    full_name: str | None = Field(default=None, min_length=1, max_length=160)
     phone: str | None = Field(default=None, max_length=32)
-    date_of_birth: date | None = None
-    gender: str | None = Field(default=None, max_length=32)
-    height_cm: float | None = Field(
-        default=None, gt=MIN_HEIGHT_CM, lt=MAX_HEIGHT_CM
-    )
-    weight: float | None = Field(default=None, gt=MIN_WEIGHT_KG, lt=MAX_WEIGHT_KG)
-
-    @field_validator("full_name")
-    @classmethod
-    def strip_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("full_name tidak boleh kosong")
-        return stripped

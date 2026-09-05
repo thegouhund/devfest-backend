@@ -18,11 +18,12 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import MeasurementSession, User, VitalsReading
+from app.db.models import FamilyMember, MeasurementSession, VitalsReading
 from app.db.session import SessionLocal
 from app.services.anomaly import detect_for_session
 from app.services.baseline import recompute_all_metrics
 from app.services.notification import notify_anomaly
+from app.services.visibility import same_account
 from app.services.rppg import RppgError, SignalQualityError, extract_vitals
 from app.services.video_storage import save_video
 
@@ -35,43 +36,46 @@ DISCLAIMER = (
 
 
 class NotAuthorisedToMeasure(PermissionError):
-    """Pemanggil tidak berhak mengukur user tersebut."""
+    """Pemanggil tidak berhak mengukur profil tersebut."""
 
 
-def resolve_subject(db: Session, actor: User, subject_id: uuid.UUID | None) -> User:
+def resolve_subject(
+    db: Session, actor: FamilyMember, subject_id: uuid.UUID | None
+) -> FamilyMember:
     """Tentukan siapa yang diukur.
 
-    Tanpa `subject_id`, subjeknya adalah pemanggil sendiri. Dengan
-    `subject_id`, hanya boleh dependent yang dikelola pemanggil — kalau
-    tidak, siapa pun bisa menuliskan data kesehatan atas nama orang lain.
+    Tanpa `subject_id`, subjeknya profil aktif. Dengan `subject_id`, boleh
+    profil mana pun dalam akun yang sama — memegang ponsel untuk mengukur
+    orang tua adalah alur utama produk ini. Di luar akun ditolak: tanpa
+    batas itu siapa pun bisa menuliskan data kesehatan atas nama orang lain.
     """
     if subject_id is None or subject_id == actor.id:
         return actor
 
-    subject = db.get(User, subject_id)
-    if subject is None or subject.managed_by_user_id != actor.id:
+    subject = db.get(FamilyMember, subject_id)
+    if subject is None or not same_account(db, actor.id, subject_id):
         raise NotAuthorisedToMeasure(
-            "Hanya bisa mengukur diri sendiri atau anggota yang Anda kelola"
+            "Hanya bisa mengukur profil dalam akun yang sama"
         )
     return subject
 
 
 def create_session(
     db: Session,
-    subject: User,
-    actor: User,
+    subject: FamilyMember,
+    actor: FamilyMember,
     capture_method: str,
     filename: str,
     content: bytes,
 ) -> MeasurementSession:
     """Buat sesi dan simpan videonya. Belum diproses.
 
-    `user_id` adalah subjek, `initiated_by_user_id` adalah pelaku — pola
-    subjek vs aktor dari ERD note 7.
+    `family_member_id` adalah subjek, `initiated_by_family_member_id` adalah
+    pelaku — pola subjek vs aktor dari ERD note 7.
     """
     session = MeasurementSession(
-        user_id=subject.id,
-        initiated_by_user_id=actor.id,
+        family_member_id=subject.id,
+        initiated_by_family_member_id=actor.id,
         capture_method=capture_method,
         started_at=datetime.now(UTC),
         processing_status="pending",
@@ -152,7 +156,7 @@ def _store_result(db: Session, session: MeasurementSession, result) -> None:
                 measurement_session_id=session.id,
                 # Didenormalisasi dari sesi: subjek, bukan yang mengukur.
                 # Kalau tertukar, data anak masuk ke grafik orang tuanya.
-                user_id=session.user_id,
+                family_member_id=session.family_member_id,
                 recorded_at=recorded_at,
                 metric_type=reading["metric_type"],
                 value=reading["value"],
@@ -170,7 +174,7 @@ def _store_result(db: Session, session: MeasurementSession, result) -> None:
     # seseorang selalu mengikuti kondisi terkininya. Kegagalan di sini
     # tidak boleh membatalkan pengukuran yang sudah berhasil disimpan.
     try:
-        recompute_all_metrics(db, session.user_id)
+        recompute_all_metrics(db, session.family_member_id)
         db.commit()
     except Exception:
         db.rollback()

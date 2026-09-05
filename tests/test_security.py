@@ -3,7 +3,7 @@
 Acceptance criteria under test:
 - hash_password/verify_password round-trip; hash bergaram dan beda tiap panggilan
 - Token membawa sub & exp; token kedaluwarsa atau dipalsukan -> 401
-- User dependent tidak bisa dapat token
+- FamilyMember dependent tidak bisa dapat token
 - Helper require_family_admin untuk route khusus admin
 """
 
@@ -18,15 +18,17 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from app.core.security import (
-    authenticate_user,
+    authenticate_account,
     create_access_token,
     decode_access_token,
+    get_current_profile,
     hash_password,
-    require_family_admin,
-    resolve_current_user,
+    require_admin_profile,
+    resolve_current_account,
     verify_password,
 )
-from app.db.models import Base, Family, FamilyMember, User
+from app.db.models import Account, Base, FamilyMember
+from tests.conftest import make_account, make_profile_row
 
 
 @pytest.fixture
@@ -194,46 +196,26 @@ class TestAccessToken:
 class TestAuthenticateUser:
     def test_valid_credentials(self, db) -> None:
         db.add(
-            User(
-                full_name="Budi",
+            Account(
                 email="budi@example.com",
                 password_hash=hash_password("rahasia123"),
             )
         )
         db.commit()
-        assert authenticate_user(db, "budi@example.com", "rahasia123") is not None
+        assert authenticate_account(db, "budi@example.com", "rahasia123") is not None
 
     def test_wrong_password(self, db) -> None:
         db.add(
-            User(
-                full_name="Budi",
+            Account(
                 email="budi@example.com",
                 password_hash=hash_password("rahasia123"),
             )
         )
         db.commit()
-        assert authenticate_user(db, "budi@example.com", "salah") is None
+        assert authenticate_account(db, "budi@example.com", "salah") is None
 
     def test_unknown_email(self, db) -> None:
-        assert authenticate_user(db, "tidakada@example.com", "apa pun") is None
-
-    def test_dependent_cannot_authenticate(self, db) -> None:
-        """ERD §2.1: dependent tidak punya password_hash, jadi tidak boleh
-        bisa login dengan cara apa pun."""
-        admin = User(full_name="Admin", email="admin@example.com")
-        db.add(admin)
-        db.flush()
-        db.add(
-            User(
-                full_name="Anak",
-                email="anak@example.com",
-                is_dependent=True,
-                managed_by_user_id=admin.id,
-                password_hash=None,
-            )
-        )
-        db.commit()
-        assert authenticate_user(db, "anak@example.com", "") is None
+        assert authenticate_account(db, "tidakada@example.com", "apa pun") is None
 
     def test_unknown_email_takes_similar_time(self, db) -> None:
         """Waktu respons tidak boleh membocorkan email mana yang terdaftar.
@@ -245,8 +227,7 @@ class TestAuthenticateUser:
         import time
 
         db.add(
-            User(
-                full_name="Ada",
+            Account(
                 email="ada@example.com",
                 password_hash=hash_password("rahasia123"),
             )
@@ -257,7 +238,7 @@ class TestAuthenticateUser:
             samples = []
             for _ in range(5):
                 start = time.perf_counter()
-                authenticate_user(db, email, "tebakan-salah")
+                authenticate_account(db, email, "tebakan-salah")
                 samples.append(time.perf_counter() - start)
             return statistics.median(samples) * 1000
 
@@ -268,112 +249,132 @@ class TestAuthenticateUser:
             f"tidak terdaftar {unknown:.1f}ms"
         )
 
-    def test_inactive_user_cannot_authenticate(self, db) -> None:
+    def test_inactive_account_cannot_authenticate(self, db) -> None:
         db.add(
-            User(
-                full_name="Nonaktif",
+            Account(
                 email="off@example.com",
                 password_hash=hash_password("rahasia123"),
                 is_active=False,
             )
         )
         db.commit()
-        assert authenticate_user(db, "off@example.com", "rahasia123") is None
+        assert authenticate_account(db, "off@example.com", "rahasia123") is None
 
 
-# --- Dependency current user -----------------------------------------------
+# --- Dependency current account ---------------------------------------------
 
 
-class TestResolveCurrentUser:
-    def test_valid_token_returns_user(self, db, secret) -> None:
-        user = User(
-            full_name="Budi",
-            email="budi@example.com",
-            password_hash=hash_password("x"),
-        )
-        db.add(user)
+class TestResolveCurrentAccount:
+    def test_valid_token_returns_account(self, db, secret) -> None:
+        account = Account(email="budi@example.com", password_hash=hash_password("x"))
+        db.add(account)
         db.commit()
-        resolved = resolve_current_user(db, create_access_token(user.id))
-        assert resolved.id == user.id
+        resolved = resolve_current_account(db, create_access_token(account.id))
+        assert resolved.id == account.id
 
-    def test_token_for_deleted_user_rejected(self, db, secret) -> None:
-        """Token valid tapi user sudah tidak ada -> 401, bukan 500."""
+    def test_token_for_deleted_account_rejected(self, db, secret) -> None:
+        """Token valid tapi akun sudah tidak ada -> 401, bukan 500."""
         with pytest.raises(HTTPException) as exc:
-            resolve_current_user(db, create_access_token(uuid.uuid4()))
+            resolve_current_account(db, create_access_token(uuid.uuid4()))
         assert exc.value.status_code == 401
 
-    def test_token_for_deactivated_user_rejected(self, db, secret) -> None:
-        """User dinonaktifkan setelah token terbit harus langsung ditolak."""
-        user = User(
-            full_name="Budi",
-            email="budi@example.com",
-            password_hash=hash_password("x"),
-        )
-        db.add(user)
+    def test_token_for_deactivated_account_rejected(self, db, secret) -> None:
+        """Akun dinonaktifkan setelah token terbit harus langsung ditolak."""
+        account = Account(email="budi@example.com", password_hash=hash_password("x"))
+        db.add(account)
         db.commit()
-        token = create_access_token(user.id)
-        user.is_active = False
+        token = create_access_token(account.id)
+        account.is_active = False
         db.commit()
         with pytest.raises(HTTPException) as exc:
-            resolve_current_user(db, token)
+            resolve_current_account(db, token)
         assert exc.value.status_code == 401
 
 
-# --- Otorisasi admin family ------------------------------------------------
+# --- Otorisasi admin profil ------------------------------------------------
 
 
-class TestRequireFamilyAdmin:
+class TestRequireAdminProfile:
+    """Hanya profil admin yang boleh mengelola profil lain (FR-6.4)."""
+
     @pytest.fixture
-    def family_setup(self, db):
-        admin = User(
-            full_name="Admin", email="a@x.com", password_hash=hash_password("x")
-        )
-        member = User(
-            full_name="Member", email="m@x.com", password_hash=hash_password("x")
-        )
-        outsider = User(
-            full_name="Orang Luar", email="o@x.com", password_hash=hash_password("x")
-        )
-        db.add_all([admin, member, outsider])
+    def profiles(self, db):
+        account = Account(email="a@x.com", password_hash=hash_password("x"))
+        db.add(account)
         db.flush()
-        family = Family(name="Keluarga", invite_code="KODE", created_by=admin.id)
-        db.add(family)
+        admin = FamilyMember(
+            account_id=account.id, full_name="Admin", role="admin"
+        )
+        member = FamilyMember(
+            account_id=account.id, full_name="Anggota", role="member"
+        )
+        db.add_all([admin, member])
+        db.commit()
+        return admin, member
+
+    def test_admin_allowed(self, profiles) -> None:
+        admin, _ = profiles
+        assert require_admin_profile(admin) is admin
+
+    def test_member_forbidden(self, profiles) -> None:
+        _, member = profiles
+        with pytest.raises(HTTPException) as exc:
+            require_admin_profile(member)
+        assert exc.value.status_code == 403
+
+
+class TestGetCurrentProfile:
+    """Token tanpa profil tidak boleh diam-diam memilih profil pertama:
+    salah subjek berarti data kesehatan tertulis ke orang yang keliru."""
+
+    @pytest.fixture
+    def account_with_profile(self, db, secret):
+        account = Account(email="b@x.com", password_hash=hash_password("x"))
+        db.add(account)
         db.flush()
-        db.add_all(
-            [
-                FamilyMember(family_id=family.id, user_id=admin.id, role="admin"),
-                FamilyMember(family_id=family.id, user_id=member.id, role="member"),
-            ]
+        profile = FamilyMember(
+            account_id=account.id, full_name="Budi", role="admin"
         )
+        db.add(profile)
         db.commit()
-        return family, admin, member, outsider
+        return account, profile
 
-    def test_admin_allowed(self, db, family_setup) -> None:
-        family, admin, _, _ = family_setup
-        require_family_admin(db, admin, family.id)
-
-    def test_member_forbidden(self, db, family_setup) -> None:
-        family, _, member, _ = family_setup
+    def test_token_without_profile_rejected(self, db, account_with_profile) -> None:
+        account, _ = account_with_profile
+        token = create_access_token(account.id)
         with pytest.raises(HTTPException) as exc:
-            require_family_admin(db, member, family.id)
+            get_current_profile(db, token)
         assert exc.value.status_code == 403
 
-    def test_outsider_forbidden(self, db, family_setup) -> None:
-        family, _, _, outsider = family_setup
-        with pytest.raises(HTTPException) as exc:
-            require_family_admin(db, outsider, family.id)
-        assert exc.value.status_code == 403
+    def test_token_with_profile_resolves(self, db, account_with_profile) -> None:
+        account, profile = account_with_profile
+        token = create_access_token(account.id, profile.id)
+        assert get_current_profile(db, token).id == profile.id
 
-    def test_removed_admin_forbidden(self, db, family_setup) -> None:
-        """Admin yang statusnya removed tidak boleh tetap punya hak admin."""
-        family, admin, _, _ = family_setup
-        membership = (
-            db.query(FamilyMember)
-            .filter_by(family_id=family.id, user_id=admin.id)
-            .one()
-        )
-        membership.status = "removed"
+    def test_profile_from_other_account_rejected(
+        self, db, account_with_profile
+    ) -> None:
+        """Token disusun ulang menunjuk profil akun lain harus ditolak,
+        bukan dilayani."""
+        account, _ = account_with_profile
+
+        lain = Account(email="c@x.com", password_hash=hash_password("x"))
+        db.add(lain)
+        db.flush()
+        profil_lain = FamilyMember(account_id=lain.id, full_name="Orang Lain")
+        db.add(profil_lain)
+        db.commit()
+
+        token = create_access_token(account.id, profil_lain.id)
+        with pytest.raises(HTTPException) as exc:
+            get_current_profile(db, token)
+        assert exc.value.status_code == 401
+
+    def test_deactivated_profile_rejected(self, db, account_with_profile) -> None:
+        account, profile = account_with_profile
+        token = create_access_token(account.id, profile.id)
+        profile.is_active = False
         db.commit()
         with pytest.raises(HTTPException) as exc:
-            require_family_admin(db, admin, family.id)
-        assert exc.value.status_code == 403
+            get_current_profile(db, token)
+        assert exc.value.status_code == 401

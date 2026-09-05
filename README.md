@@ -189,18 +189,19 @@ syarat.
 
 ## API
 
-31 endpoint aktif. Dokumentasi interaktif lengkap ada di `/docs` saat server berjalan;
+Dokumentasi interaktif lengkap ada di `/docs` saat server berjalan;
 kontrak untuk frontend ada di [`API_CONTRACT.md`](../devfest-md/API_CONTRACT.md).
 
 | Domain | Endpoint | Fungsi |
 |---|---|---|
-| **Auth** | `POST /auth/register`, `POST /auth/login` | Daftar akun, login dapat token |
-| **User** | `GET\|PATCH /users/me` | Profil sendiri, termasuk tinggi & berat |
-| **Family** | `POST /families`, `POST /families/join` | Buat family, gabung pakai kode undangan |
-| | `GET /families/{id}/members` | Daftar anggota |
-| | `PATCH\|DELETE /families/{id}/members/{user_id}` | Ubah role, keluarkan anggota |
-| | `POST /families/{id}/dependents` | Profil anak/lansia tanpa akun sendiri |
-| | `GET /families/{id}/dashboard` | Ringkasan seluruh anggota |
+| **Auth** | `POST /auth/register` | Daftar akun + profil admin sekaligus |
+| | `POST /auth/login` | Login dapat token akun (belum menunjuk profil) |
+| | `POST /auth/select-profile` | Tukar token akun dengan token berprofil; PIN kalau terkunci |
+| **Akun** | `GET\|PATCH /account/me` | Data akun: email, telepon |
+| **Profil** | `POST /profiles` | Admin membuat profil anggota keluarga |
+| | `GET /profiles`, `GET /profiles/me` | Daftar profil dalam akun, profil aktif |
+| | `PATCH\|DELETE /profiles/{id}` | Ubah data profil, nonaktifkan (admin) |
+| | `GET /profiles/dashboard/family` | Ringkasan seluruh profil yang boleh dilihat |
 | **Privasi** | `GET\|PUT /settings/visibility` | Atur data mana yang terlihat keluarga |
 | **Pengukuran** | `POST /measurements/upload`, `POST /measurements/live` | Kirim video, diproses di latar belakang |
 | | `GET /measurements/{id}` | Status pemrosesan, untuk polling |
@@ -280,20 +281,29 @@ tool chatbot memanggil fungsi yang sama, dan aturan privasi berlaku identik di k
 
 ## Model Data
 
-16 tabel. Yang perlu diketahui sebelum menyentuh skema:
+16 tabel (15 tabel data + `metric_types`). Yang perlu diketahui sebelum menyentuh skema:
+
+**Satu akun per keluarga.** Login terjadi di level `accounts` (email, password); data
+kesehatan melekat pada `family_members` (profil). Admin — profil yang dibuat saat
+registrasi — menambah profil untuk anggota keluarga lain, tanpa akun atau login terpisah
+untuk mereka. Batas akses terluar adalah `account_id`: profil dari akun lain tidak pernah
+terlihat, apa pun setelan privasinya.
+
+**Token dua tahap.** Login menghasilkan token tingkat akun; `POST /auth/select-profile`
+menukarnya dengan token yang menyematkan profil aktif (`profile` di payload JWT), setelah
+PIN diverifikasi kalau profilnya terkunci. Endpoint data kesehatan mensyaratkan token
+berprofil dan menolak 403 kalau belum ada.
 
 **Metrik bukan enum.** `metric_types` adalah tabel lookup. Menambah metrik baru (SpO2,
 stress score) cukup satu `INSERT` — tanpa migrasi, tanpa ubah kode.
 
-**Subjek ≠ pelaku.** Beberapa tabel punya `user_id` (siapa yang jadi subjek data) terpisah
-dari `*_by_user_id` (siapa yang menginput). Ini yang memungkinkan orang tua mencatat
-pengukuran atau riwayat kesehatan atas nama anaknya.
+**Subjek ≠ pelaku.** Beberapa tabel punya `family_member_id` (siapa yang jadi subjek data)
+terpisah dari `*_by_family_member_id` (siapa yang menginput). Ini yang memungkinkan satu
+anggota keluarga mencatat pengukuran atau riwayat kesehatan atas nama anggota lain di akun
+yang sama.
 
 **Vitals disimpan long-format.** Satu baris per metrik per waktu, bukan satu baris berisi
 tiga kolom. Metrik baru tidak butuh kolom baru.
-
-**Dependent tanpa login.** Ditangani lewat self-FK `managed_by_user_id` di tabel `users`,
-bukan tabel terpisah. `email` dan `password_hash` boleh NULL.
 
 > `vitals_readings` punya primary key gabungan `(id, recorded_at)` — TimescaleDB mewajibkan
 > kolom partisi ikut dalam primary key. `id` tetap UUID unik, jadi perilakunya praktis sama.

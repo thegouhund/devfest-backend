@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from app.db.models import MeasurementSession, User, VideoStorageRef
+from app.db.models import MeasurementSession, FamilyMember, VideoStorageRef
 from app.services import video_storage
 from app.services.video_storage import (
     MAX_UPLOAD_BYTES,
@@ -30,6 +30,7 @@ from app.services.video_storage import (
     save_video,
     validate_upload,
 )
+from tests.conftest import make_account, make_profile_row
 
 
 @pytest.fixture
@@ -49,12 +50,12 @@ def session(db_session):
     """Sesi pengukuran siap pakai."""
     from datetime import UTC, datetime
 
-    user = User(full_name="Budi", email="budi@example.com")
+    user = make_profile_row(db_session, full_name="Budi")
     db_session.add(user)
     db_session.flush()
     measurement = MeasurementSession(
-        user_id=user.id,
-        initiated_by_user_id=user.id,
+        family_member_id=user.id,
+        initiated_by_family_member_id=user.id,
         capture_method="upload",
         started_at=datetime.now(UTC),
     )

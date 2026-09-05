@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.chat.llm import get_chat_model
 from app.chat.tools import make_tools
-from app.db.models import User
+from app.db.models import FamilyMember
 
 
 SYSTEM_PROMPT = """Kamu adalah Health Companion pada aplikasi Family Health \
@@ -71,7 +71,7 @@ memang berdekatan dan datanya ada. Sebut sebagai kemungkinan, bukan \
 kepastian."""
 
 
-def build_agent(session_factory, actor: User):
+def build_agent(session_factory, actor: FamilyMember):
     """Rakit agent untuk satu user.
 
     `actor` diikat ke tools lewat closure, sehingga seluruh pemeriksaan izin

@@ -23,7 +23,7 @@ from app.db.models import (
     Anomaly,
     Baseline,
     MeasurementSession,
-    User,
+    FamilyMember,
     VitalsReading,
 )
 from app.services.anomaly import (
@@ -34,6 +34,7 @@ from app.services.anomaly import (
     detect,
     evaluate_reading,
 )
+from tests.conftest import make_account, make_profile_row
 
 
 @pytest.fixture
@@ -42,9 +43,8 @@ def now() -> datetime:
 
 
 @pytest.fixture
-def user(db_session) -> User:
-    person = User(full_name="Budi", email="budi@example.com")
-    db_session.add(person)
+def user(db_session) -> FamilyMember:
+    person = make_profile_row(db_session, full_name="Budi")
     db_session.commit()
     return person
 
@@ -53,7 +53,7 @@ def user(db_session) -> User:
 def baseline(db_session, user, now) -> Baseline:
     """Baseline aktif: rata-rata 70, simpangan 5."""
     row = Baseline(
-        user_id=user.id,
+        family_member_id=user.id,
         metric_type="heart_rate",
         mean_value=70.0,
         stddev_value=5.0,
@@ -67,10 +67,10 @@ def baseline(db_session, user, now) -> Baseline:
     return row
 
 
-def add_reading(db, user: User, value: float, moment: datetime) -> VitalsReading:
+def add_reading(db, user: FamilyMember, value: float, moment: datetime) -> VitalsReading:
     session = MeasurementSession(
-        user_id=user.id,
-        initiated_by_user_id=user.id,
+        family_member_id=user.id,
+        initiated_by_family_member_id=user.id,
         capture_method="upload",
         started_at=moment,
         processing_status="completed",
@@ -79,7 +79,7 @@ def add_reading(db, user: User, value: float, moment: datetime) -> VitalsReading
     db.flush()
     reading = VitalsReading(
         measurement_session_id=session.id,
-        user_id=user.id,
+        family_member_id=user.id,
         recorded_at=moment,
         metric_type="heart_rate",
         value=value,
@@ -157,7 +157,7 @@ class TestDetect:
     def test_inactive_baseline_is_silent(self, db_session, user, now) -> None:
         db_session.add(
             Baseline(
-                user_id=user.id,
+                family_member_id=user.id,
                 metric_type="heart_rate",
                 mean_value=70.0,
                 stddev_value=5.0,
@@ -218,12 +218,12 @@ class TestDetect:
     def test_baseline_of_other_user_not_used(self, db_session, user, now) -> None:
         """Baseline bersifat personal — memakai milik orang lain berarti
         membandingkan seseorang dengan tubuh orang lain."""
-        other = User(full_name="Siti", email="siti@example.com")
+        other = make_profile_row(db_session, full_name="Siti")
         db_session.add(other)
         db_session.flush()
         db_session.add(
             Baseline(
-                user_id=other.id,
+                family_member_id=other.id,
                 metric_type="heart_rate",
                 mean_value=70.0,
                 stddev_value=5.0,
@@ -262,8 +262,8 @@ class TestActivityContext:
         menjelaskan kemungkinan penyebab (FR-3.3)."""
         db_session.add(
             ActivityLog(
-                user_id=user.id,
-                logged_by_user_id=user.id,
+                family_member_id=user.id,
+                logged_by_family_member_id=user.id,
                 category="coffee",
                 quantity=3,
                 unit="cups",
@@ -283,8 +283,8 @@ class TestActivityContext:
         penyebab — penjelasan yang menyesatkan."""
         db_session.add(
             ActivityLog(
-                user_id=user.id,
-                logged_by_user_id=user.id,
+                family_member_id=user.id,
+                logged_by_family_member_id=user.id,
                 category="coffee",
                 source="menu",
                 occurred_at=now - ACTIVITY_CONTEXT_WINDOW - timedelta(hours=1),
@@ -305,15 +305,15 @@ class TestActivityContext:
 
     def test_picks_closest_activity(self, db_session, user, baseline, now) -> None:
         jauh = ActivityLog(
-            user_id=user.id,
-            logged_by_user_id=user.id,
+            family_member_id=user.id,
+            logged_by_family_member_id=user.id,
             category="exercise",
             source="menu",
             occurred_at=now - timedelta(hours=3),
         )
         dekat = ActivityLog(
-            user_id=user.id,
-            logged_by_user_id=user.id,
+            family_member_id=user.id,
+            logged_by_family_member_id=user.id,
             category="coffee",
             source="menu",
             occurred_at=now - timedelta(minutes=10),
@@ -329,13 +329,13 @@ class TestActivityContext:
     def test_other_users_activity_not_linked(
         self, db_session, user, baseline, now
     ) -> None:
-        other = User(full_name="Siti", email="siti@example.com")
+        other = make_profile_row(db_session, full_name="Siti")
         db_session.add(other)
         db_session.flush()
         db_session.add(
             ActivityLog(
-                user_id=other.id,
-                logged_by_user_id=other.id,
+                family_member_id=other.id,
+                logged_by_family_member_id=other.id,
                 category="coffee",
                 source="menu",
                 occurred_at=now - timedelta(minutes=10),

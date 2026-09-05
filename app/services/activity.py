@@ -15,31 +15,34 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import ActivityLog, User
-from app.services.visibility import accessible_user_ids
+from app.db.models import ActivityLog, FamilyMember
+from app.services.visibility import accessible_profile_ids, same_account
 
 
 class NotAuthorisedToLog(PermissionError):
-    """Pemanggil tidak berhak mencatat atau mengubah data user tersebut."""
+    """Pemanggil tidak berhak mencatat atau mengubah data profil tersebut."""
 
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
 
 
-def resolve_subject(db: Session, actor: User, subject_id: uuid.UUID | None) -> User:
+def resolve_subject(
+    db: Session, actor: FamilyMember, subject_id: uuid.UUID | None
+) -> FamilyMember:
     """Tentukan pemilik data aktivitas.
 
-    Tanpa `subject_id`, subjeknya pemanggil sendiri. Dengan `subject_id`,
-    hanya boleh dependent yang dikelola pemanggil.
+    Tanpa `subject_id`, subjeknya profil aktif. Dengan `subject_id`, boleh
+    profil mana pun dalam akun yang sama — satu keluarga satu akun, dan
+    mencatat "ibu sudah minum obat" adalah alur yang wajar.
     """
     if subject_id is None or subject_id == actor.id:
         return actor
 
-    subject = db.get(User, subject_id)
-    if subject is None or subject.managed_by_user_id != actor.id:
+    subject = db.get(FamilyMember, subject_id)
+    if subject is None or not same_account(db, actor.id, subject_id):
         raise NotAuthorisedToLog(
-            "Hanya bisa mencatat untuk diri sendiri atau anggota yang Anda kelola"
+            "Hanya bisa mencatat untuk profil dalam akun yang sama"
         )
     return subject
 
@@ -47,7 +50,7 @@ def resolve_subject(db: Session, actor: User, subject_id: uuid.UUID | None) -> U
 def create_activity(
     db: Session,
     *,
-    actor: User,
+    actor: FamilyMember,
     subject_id: uuid.UUID | None,
     category: str,
     quantity: float | None,
@@ -63,8 +66,8 @@ def create_activity(
     subject = resolve_subject(db, actor, subject_id)
 
     activity = ActivityLog(
-        user_id=subject.id,
-        logged_by_user_id=actor.id,
+        family_member_id=subject.id,
+        logged_by_family_member_id=actor.id,
         category=category,
         quantity=quantity,
         unit=unit,
@@ -95,14 +98,14 @@ def list_activities(
     Melempar `NotAuthorisedToLog` kalau `subject_id` di luar jangkauan —
     daftar kosong akan terbaca seolah orangnya belum pernah mencatat apa pun.
     """
-    visible = accessible_user_ids(db, viewer_id, "activities")
+    visible = accessible_profile_ids(db, viewer_id, "activities")
 
     if subject_id is not None:
         if subject_id not in visible:
-            raise NotAuthorisedToLog("Anda tidak punya akses ke data user ini")
+            raise NotAuthorisedToLog("Anda tidak punya akses ke data profil ini")
         visible = {subject_id}
 
-    conditions = [ActivityLog.user_id.in_(visible)]
+    conditions = [ActivityLog.family_member_id.in_(visible)]
     if category:
         conditions.append(ActivityLog.category == category)
     if start:
@@ -129,22 +132,23 @@ def list_activities(
 
 
 def get_editable_activity(
-    db: Session, activity_id: uuid.UUID, actor: User
+    db: Session, activity_id: uuid.UUID, actor: FamilyMember
 ) -> ActivityLog:
     """Ambil aktivitas yang boleh diubah `actor`.
 
-    Boleh melihat tidak berarti boleh mengubah: hanya subjeknya sendiri
-    atau admin yang mengelolanya.
+    Boleh melihat tidak berarti boleh mengubah. Yang boleh: subjeknya
+    sendiri, atau admin akun. Sesama anggota biasa sengaja tidak — satu
+    akun berarti semua sekeluarga bisa saling lihat, tapi menulis ulang
+    catatan obat orang lain jelas bukan yang diinginkan.
     """
     activity = db.get(ActivityLog, activity_id)
     if activity is None:
         raise LookupError("Aktivitas tidak ditemukan")
 
-    if activity.user_id == actor.id:
+    if activity.family_member_id == actor.id:
         return activity
 
-    subject = db.get(User, activity.user_id)
-    if subject is not None and subject.managed_by_user_id == actor.id:
+    if actor.role == "admin" and same_account(db, actor.id, activity.family_member_id):
         return activity
 
     raise NotAuthorisedToLog("Anda tidak berhak mengubah aktivitas ini")

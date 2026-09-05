@@ -48,17 +48,17 @@ DIRECTORY_MODE = 0o700
 _MP4_BRANDS = (b"ftyp", b"moov", b"mdat", b"free", b"wide", b"skip")
 
 
-def build_storage_path(user_id: uuid.UUID, session_id: uuid.UUID) -> Path:
+def build_storage_path(family_member_id: uuid.UUID, session_id: uuid.UUID) -> Path:
     """Susun path tujuan dari UUID saja.
 
     Menerima `uuid.UUID`; string sembarang ditolak, jadi tidak ada input
     user yang bisa membelokkan lokasi tulis.
     """
-    safe_user = _require_uuid(user_id, "user_id")
+    safe_member = _require_uuid(family_member_id, "family_member_id")
     safe_session = _require_uuid(session_id, "session_id")
 
     root = Path(get_settings().video_storage_path).resolve()
-    path = root / str(safe_user) / f"{safe_session}.mp4"
+    path = root / str(safe_member) / f"{safe_session}.mp4"
 
     # Sabuk pengaman kedua: apa pun yang terjadi di atas, hasilnya harus
     # tetap berada di dalam direktori penyimpanan.
@@ -116,7 +116,7 @@ def save_video(
     """
     validate_upload(filename, content)
 
-    path = build_storage_path(session.user_id, session.id)
+    path = build_storage_path(session.family_member_id, session.id)
     _write_file(path, content)
 
     ref = VideoStorageRef(

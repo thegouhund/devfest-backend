@@ -2,8 +2,8 @@
 
 Acceptance criteria under test:
 - Create memvalidasi kategori dan default occurred_at ke sekarang, bisa ditimpa
-- Listing memfilter kategori & rentang tanggal, menghormati accessible_user_ids
-- Admin bisa mencatat atas nama dependent (logged_by_user_id != user_id)
+- Listing memfilter kategori & rentang tanggal, menghormati accessible_profile_ids
+- Admin bisa mencatat atas nama dependent (logged_by_family_member_id != user_id)
 - Ubah/hapus terbatas pada subjek atau admin pengelolanya
 - Lapisan service bisa dipanggil langsung, supaya tool chatbot (Task 18)
   memakai ulang fungsi yang sama
@@ -17,57 +17,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.db.models import ActivityLog, User
+from app.db.models import ActivityLog, FamilyMember
 from app.services.activity import create_activity, list_activities
 
 
 ACTIVITIES = "/api/v1/activities"
-FAMILIES = "/api/v1/families"
-
-
-def register(client, email: str, name: str) -> dict:
-    response = client.post(
-        "/api/v1/auth/register",
-        json={"email": email, "password": "rahasia-kuat-123", "full_name": name},
-    )
-    assert response.status_code == 201, response.text
-    headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
-    user_id = client.get("/api/v1/users/me", headers=headers).json()["id"]
-    return {"headers": headers, "id": uuid.UUID(user_id)}
 
 
 @pytest.fixture
 def now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
-
-
-@pytest.fixture
-def keluarga(client):
-    ayah = register(client, "ayah@x.com", "Ayah")
-    ibu = register(client, "ibu@x.com", "Ibu")
-    luar = register(client, "luar@x.com", "Orang Luar")
-
-    family = client.post(
-        FAMILIES, json={"name": "Keluarga"}, headers=ayah["headers"]
-    ).json()
-    client.post(
-        f"{FAMILIES}/join",
-        json={"invite_code": family["invite_code"]},
-        headers=ibu["headers"],
-    )
-    anak = client.post(
-        f"{FAMILIES}/{family['id']}/dependents",
-        json={"full_name": "Anak"},
-        headers=ayah["headers"],
-    ).json()
-
-    return {
-        "family": family,
-        "ayah": ayah,
-        "ibu": ibu,
-        "luar": luar,
-        "anak": {"id": uuid.UUID(anak["id"])},
-    }
 
 
 def payload(**overrides) -> dict:
@@ -109,7 +68,7 @@ class TestCreate:
         assert abs((occurred - now).total_seconds()) < 60
 
     def test_occurred_at_can_be_backdated(self, client, keluarga, now) -> None:
-        """User sering mencatat setelah kejadian — waktunya harus bisa
+        """FamilyMember sering mencatat setelah kejadian — waktunya harus bisa
         dikoreksi (FR-7.1)."""
         kemarin = now - timedelta(days=1)
         body = client.post(
@@ -173,46 +132,56 @@ class TestTimestampFormat:
         """Diperiksa lintas endpoint, karena masalahnya ada di lapisan
         serialisasi, bukan pada satu endpoint saja."""
         profil = client.get(
-            "/api/v1/users/me", headers=keluarga["ayah"]["headers"]
+            "/api/v1/profiles/me", headers=keluarga["ayah"]["headers"]
         ).json()
         assert datetime.fromisoformat(profil["created_at"]).tzinfo is not None
 
-        family = client.get(
-            f"{FAMILIES}/{keluarga['family']['id']}/members",
-            headers=keluarga["ayah"]["headers"],
+        daftar = client.get(
+            "/api/v1/profiles", headers=keluarga["ayah"]["headers"]
         ).json()
-        joined = family["members"][0]["joined_at"]
-        assert datetime.fromisoformat(joined).tzinfo is not None
+        dibuat = daftar["profiles"][0]["created_at"]
+        assert datetime.fromisoformat(dibuat).tzinfo is not None
 
 
 class TestCreateOnBehalf:
-    def test_admin_can_log_for_dependent(self, client, keluarga, db_session) -> None:
+    def test_can_log_for_profile_in_same_account(
+        self, client, keluarga, db_session
+    ) -> None:
         """Pola subjek vs pelaku: orang tua mencatat untuk anaknya."""
         response = client.post(
             ACTIVITIES,
-            json=payload(user_id=str(keluarga["anak"]["id"])),
+            json=payload(family_member_id=str(keluarga["anak"]["id"])),
             headers=keluarga["ayah"]["headers"],
         )
         assert response.status_code == 201, response.text
 
         row = db_session.execute(select(ActivityLog)).scalar_one()
-        assert row.user_id == keluarga["anak"]["id"]
-        assert row.logged_by_user_id == keluarga["ayah"]["id"]
+        assert row.family_member_id == keluarga["anak"]["id"]
+        assert row.logged_by_family_member_id == keluarga["ayah"]["id"]
 
-    def test_cannot_log_for_unrelated_user(self, client, keluarga) -> None:
-        """Mencatat atas nama orang yang bukan dependent-nya = menulis data
-        kesehatan orang lain."""
+    def test_member_can_also_log_for_sibling(self, client, keluarga) -> None:
+        """Satu keluarga satu akun: mencatat "ibu sudah minum obat" adalah
+        alur yang wajar, tidak terbatas pada admin."""
         response = client.post(
             ACTIVITIES,
-            json=payload(user_id=str(keluarga["ibu"]["id"])),
+            json=payload(family_member_id=str(keluarga["ibu"]["id"])),
+            headers=keluarga["anak"]["headers"],
+        )
+        assert response.status_code == 201, response.text
+
+    def test_cannot_log_for_other_account(self, client, keluarga) -> None:
+        """Batasnya akun: menulis data kesehatan ke akun lain harus ditolak."""
+        response = client.post(
+            ACTIVITIES,
+            json=payload(family_member_id=str(keluarga["luar"]["id"])),
             headers=keluarga["ayah"]["headers"],
         )
         assert response.status_code == 403
 
-    def test_cannot_log_for_nonexistent_user(self, client, keluarga) -> None:
+    def test_cannot_log_for_nonexistent_profile(self, client, keluarga) -> None:
         response = client.post(
             ACTIVITIES,
-            json=payload(user_id=str(uuid.uuid4())),
+            json=payload(family_member_id=str(uuid.uuid4())),
             headers=keluarga["ayah"]["headers"],
         )
         assert response.status_code in (403, 404)
@@ -276,20 +245,21 @@ class TestList:
         assert body["total"] == 4
 
     def test_private_activities_hidden(self, client, isi) -> None:
+        """Ibu anggota biasa, jadi setelan privat anak benar-benar menutup."""
         client.put(
             "/api/v1/settings/visibility",
             json={"data_type": "activities", "visibility": "private"},
-            headers=isi["ayah"]["headers"],
+            headers=isi["anak"]["headers"],
         )
         response = client.get(
-            f"{ACTIVITIES}?user_id={isi['ayah']['id']}",
+            f"{ACTIVITIES}?family_member_id={isi['anak']['id']}",
             headers=isi["ibu"]["headers"],
         )
         assert response.status_code == 403
 
     def test_outsider_forbidden(self, client, isi) -> None:
         response = client.get(
-            f"{ACTIVITIES}?user_id={isi['ayah']['id']}",
+            f"{ACTIVITIES}?family_member_id={isi['ayah']['id']}",
             headers=isi["luar"]["headers"],
         )
         assert response.status_code == 403
@@ -393,7 +363,7 @@ class TestServiceLayerReuse:
     HTTP — jadi aturan yang sama berlaku di chat maupun REST."""
 
     def test_create_callable_directly(self, db_session, keluarga) -> None:
-        ayah = db_session.get(User, keluarga["ayah"]["id"])
+        ayah = db_session.get(FamilyMember, keluarga["ayah"]["id"])
         activity = create_activity(
             db_session,
             actor=ayah,
@@ -423,12 +393,14 @@ class TestServiceLayerReuse:
         chatbot bisa melewatinya."""
         from app.services.activity import NotAuthorisedToLog
 
-        ayah = db_session.get(User, keluarga["ayah"]["id"])
+        ayah = db_session.get(FamilyMember, keluarga["ayah"]["id"])
         with pytest.raises(NotAuthorisedToLog):
             create_activity(
                 db_session,
                 actor=ayah,
-                subject_id=keluarga["ibu"]["id"],
+                # Profil di akun lain: batas yang harus ditegakkan service,
+                # bukan endpoint.
+                subject_id=keluarga["luar"]["id"],
                 category="coffee",
                 quantity=None,
                 unit=None,

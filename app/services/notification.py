@@ -12,12 +12,13 @@ Dua aturan yang dijaga di sini:
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Anomaly, Notification, User
+from app.db.models import Anomaly, FamilyMember, Notification
 from app.services.telegram import TelegramDeliveryError, active_link, send_message
 
 
@@ -37,44 +38,24 @@ METRIC_LABEL = {
 
 
 def notify_anomaly(db: Session, anomaly: Anomaly) -> list[Notification]:
-    """Kirim notifikasi untuk satu anomali ke semua penerima yang berhak.
+    """Kirim notifikasi untuk satu anomali ke akun pemilik profil.
 
-    Penerimanya: subjek anomali, plus admin pengelolanya kalau subjek
-    adalah dependent — dependent tidak punya akun Telegram sendiri (FR-5.2).
+    Satu keluarga satu akun, dan Telegram tersambung di level akun — jadi
+    penerimanya tunggal: akun yang menaungi profil subjek (FR-5.2). Nama
+    subjek disebut dalam pesan supaya jelas ini soal siapa.
 
     Tidak pernah melempar exception. Pemanggil yang melakukan `commit`.
     """
-    subject = db.get(User, anomaly.user_id)
+    subject = db.get(FamilyMember, anomaly.family_member_id)
     if subject is None:
         return []
 
     message = build_message(db, anomaly, subject)
-    notifications = []
-
-    for recipient in _recipients(db, subject):
-        notifications.append(_deliver(db, anomaly, recipient, message))
-
-    return notifications
-
-
-def _recipients(db: Session, subject: User) -> list[User]:
-    """Siapa yang perlu diberi tahu.
-
-    Dipakai set berbasis id supaya user yang mengelola dirinya sendiri
-    tidak menerima dua pesan untuk satu anomali.
-    """
-    recipients = [subject]
-
-    if subject.managed_by_user_id is not None:
-        manager = db.get(User, subject.managed_by_user_id)
-        if manager is not None and manager.id != subject.id:
-            recipients.append(manager)
-
-    return recipients
+    return [_deliver(db, anomaly, subject.account_id, message)]
 
 
 def _deliver(
-    db: Session, anomaly: Anomaly, recipient: User, message: str
+    db: Session, anomaly: Anomaly, account_id: uuid.UUID, message: str
 ) -> Notification:
     """Tulis baris audit lalu coba kirim.
 
@@ -82,7 +63,7 @@ def _deliver(
     jadi kegagalan tetap meninggalkan jejak.
     """
     notification = Notification(
-        user_id=recipient.id,
+        account_id=account_id,
         anomaly_id=anomaly.id,
         channel=CHANNEL_TELEGRAM,
         content=message,
@@ -91,7 +72,7 @@ def _deliver(
     db.add(notification)
     db.flush()
 
-    link = active_link(db, recipient.id)
+    link = active_link(db, account_id)
     if link is None:
         # Belum menyambungkan Telegram: bukan kegagalan pengiriman, jadi
         # dibiarkan `pending` sebagai catatan bahwa pesannya tidak terkirim.
@@ -112,7 +93,7 @@ def _deliver(
     return notification
 
 
-def build_message(db: Session, anomaly: Anomaly, subject: User) -> str:
+def build_message(db: Session, anomaly: Anomaly, subject: FamilyMember) -> str:
     """Susun isi pesan sesuai FR-5.3: metrik, nilai vs baseline, waktu,
     dan tautan ke detail."""
     settings = get_settings()

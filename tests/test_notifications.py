@@ -1,4 +1,4 @@
-"""Task 15: linking Telegram dan pengiriman notifikasi (PRD FR-5.1 s.d. FR-5.3).
+"""Linking Telegram dan pengiriman notifikasi (PRD FR-5.1 s.d. FR-5.3).
 
 Acceptance criteria under test:
 - POST /telegram/link mengembalikan kode sekali pakai yang kedaluwarsa
@@ -7,7 +7,8 @@ Acceptance criteria under test:
 - Kegagalan kirim menandai status failed dan tidak pernah merambat ke
   jalur deteksi
 - Isi pesan memuat metrik, nilai vs baseline, waktu, dan tautan (FR-5.3)
-- Anomali pada dependent memberi tahu admin pengelolanya juga (FR-5.2)
+- Telegram tersambung di level akun: anomali pada profil mana pun di akun
+  itu memberi tahu akun yang sama (FR-5.2)
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.db.models import Anomaly, Notification, TelegramLink, User
+from app.db.models import Anomaly, Notification, TelegramLink, FamilyMember
 from app.services import telegram as telegram_service
 from app.services.notification import notify_anomaly
 from app.services.telegram import (
@@ -27,10 +28,10 @@ from app.services.telegram import (
     consume_link_code,
     issue_link_code,
 )
+from tests.conftest import make_account, make_profile_row
 
 
 TELEGRAM = "/api/v1/telegram"
-FAMILIES = "/api/v1/families"
 
 
 @pytest.fixture
@@ -64,18 +65,20 @@ def gagal_kirim(monkeypatch):
     monkeypatch.setattr(notification_service, "send_message", kirim)
 
 
-def link_user(db, user: User, chat_id: str = "12345") -> TelegramLink:
+def link_account(db, account, chat_id: str = "12345") -> TelegramLink:
+    """Telegram tersambung di level akun, bukan profil — dependent tidak
+    punya akun Telegram sendiri (FR-5.2)."""
     link = TelegramLink(
-        user_id=user.id, telegram_chat_id=chat_id, link_code=None, is_active=True
+        account_id=account.id, telegram_chat_id=chat_id, link_code=None, is_active=True
     )
     db.add(link)
     db.commit()
     return link
 
 
-def make_anomaly(db, user: User, now: datetime, **overrides) -> Anomaly:
+def make_anomaly(db, profile: FamilyMember, now: datetime, **overrides) -> Anomaly:
     anomaly = Anomaly(
-        user_id=user.id,
+        family_member_id=profile.id,
         metric_type="heart_rate",
         observed_value=105.0,
         baseline_mean=70.0,
@@ -208,16 +211,13 @@ class TestStatus:
 
 class TestNotifyAnomaly:
     @pytest.fixture
-    def user(self, db_session) -> User:
-        person = User(full_name="Budi", email="budi@example.com")
-        db_session.add(person)
-        db_session.commit()
-        return person
+    def user(self, db_session) -> FamilyMember:
+        return make_profile_row(db_session, full_name="Budi")
 
     def test_writes_notification_row(
         self, db_session, user, now, terkirim
     ) -> None:
-        link_user(db_session, user)
+        link_account(db_session, user.account)
         anomaly = make_anomaly(db_session, user, now)
 
         notify_anomaly(db_session, anomaly)
@@ -228,7 +228,7 @@ class TestNotifyAnomaly:
         assert rows[0].anomaly_id == anomaly.id
 
     def test_marks_sent_on_success(self, db_session, user, now, terkirim) -> None:
-        link_user(db_session, user)
+        link_account(db_session, user.account)
         anomaly = make_anomaly(db_session, user, now)
 
         notify_anomaly(db_session, anomaly)
@@ -242,7 +242,7 @@ class TestNotifyAnomaly:
         self, db_session, user, now, terkirim
     ) -> None:
         """FR-5.3: metrik, nilai vs baseline, waktu, dan tautan."""
-        link_user(db_session, user)
+        link_account(db_session, user.account)
         anomaly = make_anomaly(db_session, user, now)
 
         notify_anomaly(db_session, anomaly)
@@ -258,7 +258,7 @@ class TestNotifyAnomaly:
     ) -> None:
         """Baris audit harus ada walau pengiriman gagal — kalau ditulis
         setelahnya, kegagalan berarti tidak ada jejak sama sekali."""
-        link_user(db_session, user)
+        link_account(db_session, user.account)
         anomaly = make_anomaly(db_session, user, now)
 
         notify_anomaly(db_session, anomaly)
@@ -269,7 +269,7 @@ class TestNotifyAnomaly:
     def test_failure_marks_status_failed(
         self, db_session, user, now, gagal_kirim
     ) -> None:
-        link_user(db_session, user)
+        link_account(db_session, user.account)
         anomaly = make_anomaly(db_session, user, now)
 
         notify_anomaly(db_session, anomaly)
@@ -281,12 +281,12 @@ class TestNotifyAnomaly:
     def test_failure_does_not_raise(self, db_session, user, now, gagal_kirim) -> None:
         """Telegram mati tidak boleh menggagalkan deteksi anomali yang
         sudah tersimpan."""
-        link_user(db_session, user)
+        link_account(db_session, user.account)
         anomaly = make_anomaly(db_session, user, now)
 
         notify_anomaly(db_session, anomaly)  # tidak boleh melempar
 
-    def test_unlinked_user_gets_no_telegram(
+    def test_unlinked_account_gets_no_telegram(
         self, db_session, user, now, terkirim
     ) -> None:
         anomaly = make_anomaly(db_session, user, now)
@@ -295,7 +295,7 @@ class TestNotifyAnomaly:
         assert terkirim == []
 
     def test_inactive_link_skipped(self, db_session, user, now, terkirim) -> None:
-        link = link_user(db_session, user)
+        link = link_account(db_session, user.account)
         link.is_active = False
         db_session.commit()
 
@@ -305,37 +305,34 @@ class TestNotifyAnomaly:
         assert terkirim == []
 
 
-class TestDependentNotification:
-    """FR-5.2: anomali pada dependent juga memberi tahu admin pengelolanya,
-    karena dependent tidak punya akun Telegram sendiri."""
+class TestFamilyNotification:
+    """FR-5.2: anomali pada profil mana pun memberi tahu akun keluarganya —
+    Telegram tersambung di level akun, bukan per profil."""
 
     @pytest.fixture
     def keluarga(self, db_session):
-        admin = User(full_name="Ayah", email="ayah@example.com")
-        db_session.add(admin)
-        db_session.flush()
-        anak = User(
-            full_name="Anak", is_dependent=True, managed_by_user_id=admin.id
-        )
-        db_session.add(anak)
+        admin = make_profile_row(db_session, full_name="Ayah")
+        anak = make_profile_row(db_session, account=admin.account, full_name="Anak")
         db_session.commit()
         return {"admin": admin, "anak": anak}
 
-    def test_manager_notified(self, db_session, keluarga, now, terkirim) -> None:
-        link_user(db_session, keluarga["admin"], chat_id="admin-chat")
+    def test_account_notified_for_any_profile(
+        self, db_session, keluarga, now, terkirim
+    ) -> None:
+        link_account(db_session, keluarga["admin"].account, chat_id="akun-chat")
         anomaly = make_anomaly(db_session, keluarga["anak"], now)
 
         notify_anomaly(db_session, anomaly)
         db_session.commit()
 
-        assert any(p["chat_id"] == "admin-chat" for p in terkirim)
+        assert any(p["chat_id"] == "akun-chat" for p in terkirim)
 
     def test_message_names_the_subject(
         self, db_session, keluarga, now, terkirim
     ) -> None:
-        """Admin perlu tahu ini soal siapa — dia bisa mengelola beberapa
-        dependent sekaligus."""
-        link_user(db_session, keluarga["admin"], chat_id="admin-chat")
+        """Akun perlu tahu ini soal siapa — satu akun bisa punya beberapa
+        profil sekaligus."""
+        link_account(db_session, keluarga["admin"].account, chat_id="akun-chat")
         anomaly = make_anomaly(db_session, keluarga["anak"], now)
 
         notify_anomaly(db_session, anomaly)
@@ -343,14 +340,12 @@ class TestDependentNotification:
 
         assert "Anak" in terkirim[0]["text"]
 
-    def test_no_duplicate_when_subject_is_own_manager(
-        self, db_session, now, terkirim
-    ) -> None:
-        """User biasa tidak boleh dapat dua pesan untuk satu anomali."""
-        person = User(full_name="Mandiri", email="mandiri@example.com")
-        db_session.add(person)
+    def test_single_message_per_anomaly(self, db_session, now, terkirim) -> None:
+        """Satu anomali menghasilkan satu notifikasi, tidak berlipat karena
+        cara subjeknya dicari."""
+        person = make_profile_row(db_session, full_name="Mandiri")
         db_session.commit()
-        link_user(db_session, person, chat_id="chat-sendiri")
+        link_account(db_session, person.account, chat_id="chat-sendiri")
 
         anomaly = make_anomaly(db_session, person, now)
         notify_anomaly(db_session, anomaly)

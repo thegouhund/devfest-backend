@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.chat.llm import ChatUnavailable
-from app.core.security import get_current_user
-from app.db.models import User
+from app.core.security import get_current_account, get_current_profile
+from app.db.models import Account, FamilyMember
 from app.db.session import get_db
 from app.schemas import (
     ChatConversationDetailResponse,
@@ -37,18 +37,20 @@ router = APIRouter()
 @router.post("", response_model=ChatResponse)
 def send_message(
     payload: ChatRequest,
-    current_user: User = Depends(get_current_user),
+    current_profile: FamilyMember = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     """Kirim satu pesan, terima balasan.
 
+    Butuh profil aktif, bukan hanya akun: agent menjawab atas nama profil
+    yang sedang dipilih ("detak jantung saya" harus merujuk orang itu).
     Kosongkan `conversation_id` untuk memulai percakapan baru; isi dengan
     id sebelumnya supaya pertanyaan lanjutan tetap nyambung.
     """
     try:
         balasan, conversation = chat_service.ask(
             db,
-            user=current_user,
+            profile=current_profile,
             message=payload.message,
             conversation_id=payload.conversation_id,
         )
@@ -74,11 +76,11 @@ def send_message(
 
 @router.get("/conversations", response_model=ChatConversationListResponse)
 def read_conversations(
-    current_user: User = Depends(get_current_user),
+    current_account: Account = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> ChatConversationListResponse:
     """Daftar sesi chat milik sendiri, terbaru lebih dulu."""
-    rows = list_conversations(db, current_user.id)
+    rows = list_conversations(db, current_account.id)
     return ChatConversationListResponse(
         conversations=[ChatConversationResponse.model_validate(r) for r in rows],
         total=len(rows),
@@ -91,7 +93,7 @@ def read_conversations(
 )
 def read_conversation(
     conversation_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_account: Account = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> ChatConversationDetailResponse:
     """Isi satu percakapan.
@@ -100,7 +102,7 @@ def read_conversation(
     punya jalur berbagi seperti data vital.
     """
     try:
-        pesan = get_history(db, conversation_id, viewer_id=current_user.id)
+        pesan = get_history(db, conversation_id, viewer_account_id=current_account.id)
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)

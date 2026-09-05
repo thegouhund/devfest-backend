@@ -8,12 +8,12 @@ from app.api.v1.activities import router as activities_router
 from app.api.v1.anomalies import router as anomalies_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.chat import router as chat_router
-from app.api.v1.families import router as families_router
+from app.api.v1.account import router as account_router
 from app.api.v1.health import router as health_router
 from app.api.v1.measurements import router as measurements_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.telegram import router as telegram_router
-from app.api.v1.users import router as users_router
+from app.api.v1.profiles import router as profiles_router
 from app.api.v1.vitals import router as vitals_router
 from app.core.config import get_settings
 from app.services.rppg import warm_up as warm_up_rppg
@@ -66,8 +66,8 @@ app.add_middleware(
 
 app.include_router(health_router, prefix="/health", tags=["health"])
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
-app.include_router(users_router, prefix="/api/v1/users", tags=["users"])
-app.include_router(families_router, prefix="/api/v1/families", tags=["families"])
+app.include_router(account_router, prefix="/api/v1/account", tags=["account"])
+app.include_router(profiles_router, prefix="/api/v1/profiles", tags=["profiles"])
 app.include_router(settings_router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(
     measurements_router, prefix="/api/v1/measurements", tags=["measurements"]

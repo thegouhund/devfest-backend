@@ -1,14 +1,14 @@
-"""Task 17: penyimpanan percakapan chatbot (ERD §2.11, §2.12).
+"""Penyimpanan percakapan chatbot (ERD §2.11, §2.12).
 
 Acceptance criteria under test:
-- Memulai chat membuat baris conversation_log
+- Memulai chat membuat baris conversation_log, melekat pada akun
 - Tiap giliran user/assistant/system/tool tersimpan berurutan
 - Mengakhiri sesi mengisi ended_at dan ringkasan
-- Pengambilan riwayat dibatasi hanya pemiliknya
+- Pengambilan riwayat dibatasi hanya akun pemiliknya
 
 Catatan: pesan chat memuat cerita kesehatan yang sangat pribadi. Berbeda
-dari vitals yang bisa dibagikan ke keluarga, isi percakapan tidak pernah
-terlihat anggota lain — bahkan admin yang mengelola dependent sekalipun.
+dari vitals yang bisa dibagikan antar profil, isi percakapan melekat di
+level akun dan tidak punya jalur berbagi sama sekali.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
-from app.db.models import ConversationLog, ConversationMessage, User
+from app.db.models import Account, ConversationLog, ConversationMessage
 from app.services.conversation import (
     NotConversationOwner,
     append_message,
@@ -27,22 +27,19 @@ from app.services.conversation import (
     get_history,
     start_conversation,
 )
+from tests.conftest import make_account
 
 
 @pytest.fixture
-def user(db_session) -> User:
-    person = User(full_name="Budi", email="budi@example.com")
-    db_session.add(person)
-    db_session.commit()
-    return person
+def user(db_session) -> Account:
+    return make_account(db_session, email="budi@example.com")
 
 
 @pytest.fixture
-def other_user(db_session) -> User:
-    person = User(full_name="Siti", email="siti@example.com")
-    db_session.add(person)
+def other_user(db_session) -> Account:
+    account = make_account(db_session, email="siti@example.com")
     db_session.commit()
-    return person
+    return account
 
 
 # --- Memulai percakapan ----------------------------------------------------
@@ -53,7 +50,7 @@ class TestStartConversation:
         conversation = start_conversation(db_session, user.id)
         db_session.commit()
 
-        assert conversation.user_id == user.id
+        assert conversation.account_id == user.id
         assert db_session.execute(select(ConversationLog)).scalar_one() is not None
 
     def test_records_start_time(self, db_session, user) -> None:
@@ -68,7 +65,7 @@ class TestStartConversation:
         assert conversation.summary is None
 
     def test_multiple_conversations_allowed(self, db_session, user) -> None:
-        """User bisa punya beberapa sesi chat pada waktu berbeda."""
+        """FamilyMember bisa punya beberapa sesi chat pada waktu berbeda."""
         start_conversation(db_session, user.id)
         start_conversation(db_session, user.id)
         db_session.commit()
@@ -109,7 +106,7 @@ class TestAppendMessage:
             append_message(db_session, conversation, role, content)
         db_session.commit()
 
-        history = get_history(db_session, conversation.id, viewer_id=conversation.user_id)
+        history = get_history(db_session, conversation.id, viewer_account_id=conversation.account_id)
         assert [(m.role, m.content) for m in history] == giliran
 
     def test_order_survives_identical_timestamps(
@@ -131,7 +128,7 @@ class TestAppendMessage:
         db_session.commit()
 
         history = get_history(
-            db_session, conversation.id, viewer_id=conversation.user_id
+            db_session, conversation.id, viewer_account_id=conversation.account_id
         )
         assert [(m.role, m.content) for m in history] == giliran
 
@@ -141,7 +138,7 @@ class TestAppendMessage:
         db_session.commit()
 
         history = get_history(
-            db_session, conversation.id, viewer_id=conversation.user_id
+            db_session, conversation.id, viewer_account_id=conversation.account_id
         )
         assert [m.sequence for m in history] == [0, 1, 2]
 
@@ -228,37 +225,20 @@ class TestHistoryAccess:
         return row
 
     def test_owner_can_read(self, db_session, conversation, user) -> None:
-        history = get_history(db_session, conversation.id, viewer_id=user.id)
+        history = get_history(db_session, conversation.id, viewer_account_id=user.id)
         assert len(history) == 1
 
     def test_other_user_cannot_read(
         self, db_session, conversation, other_user
     ) -> None:
-        """Isi percakapan tidak pernah terlihat orang lain — berbeda dari
-        vitals yang bisa dibagikan ke keluarga."""
+        """Isi percakapan tidak pernah terlihat akun lain — chat melekat
+        pada akun dan tidak punya jalur berbagi sama sekali."""
         with pytest.raises(NotConversationOwner):
-            get_history(db_session, conversation.id, viewer_id=other_user.id)
-
-    def test_manager_cannot_read_dependent_chat(self, db_session, user) -> None:
-        """Bahkan admin pengelola tidak bisa membaca isi chat dependent-nya.
-
-        Dependent memang tidak login sendiri, tapi aturannya dibuat tegas
-        supaya tidak ada jalur baca yang terbuka begitu saja nanti.
-        """
-        anak = User(full_name="Anak", is_dependent=True, managed_by_user_id=user.id)
-        db_session.add(anak)
-        db_session.commit()
-
-        percakapan = start_conversation(db_session, anak.id)
-        append_message(db_session, percakapan, "user", "cerita pribadi")
-        db_session.commit()
-
-        with pytest.raises(NotConversationOwner):
-            get_history(db_session, percakapan.id, viewer_id=user.id)
+            get_history(db_session, conversation.id, viewer_account_id=other_user.id)
 
     def test_unknown_conversation_raises(self, db_session, user) -> None:
         with pytest.raises(LookupError):
-            get_history(db_session, uuid.uuid4(), viewer_id=user.id)
+            get_history(db_session, uuid.uuid4(), viewer_account_id=user.id)
 
 
 # --- Daftar percakapan -----------------------------------------------------
@@ -274,7 +254,7 @@ class TestListConversations:
 
         rows = list_conversations(db_session, user.id)
         assert len(rows) == 1
-        assert rows[0].user_id == user.id
+        assert rows[0].account_id == user.id
 
     def test_newest_first(self, db_session, user) -> None:
         from app.services.conversation import list_conversations

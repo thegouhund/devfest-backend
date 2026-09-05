@@ -1,12 +1,12 @@
-"""Task 10: endpoint sesi pengukuran.
+"""Endpoint sesi pengukuran.
 
 Acceptance criteria under test:
 - Upload balik 202 dengan session id seketika; pemrosesan tidak inline
 - Status pending -> processing -> completed; exception jadi failed dengan
   alasan, tidak pernah menggantung di processing
-- Sukses menulis satu baris vitals_readings per metrik, user_id
+- Sukses menulis satu baris vitals_readings per metrik, family_member_id
   didenormalisasi dari sesi
-- Admin boleh mengukur dependent yang dikelolanya; mengukur orang lain 403
+- Boleh mengukur profil mana pun di akun yang sama; mengukur akun lain 403
 - Hasil membawa flag kualitas dan disclaimer FR-1.6
 """
 
@@ -17,13 +17,12 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from app.db.models import MeasurementSession, User, VideoStorageRef, VitalsReading
+from app.db.models import MeasurementSession, FamilyMember, VideoStorageRef, VitalsReading
 from app.services import rppg as rppg_service
 from app.services.rppg import ExtractionResult, RppgError, SignalQualityError
 
 
 MEASUREMENTS = "/api/v1/measurements"
-FAMILIES = "/api/v1/families"
 
 
 def fake_mp4(size: int = 4096) -> bytes:
@@ -69,14 +68,9 @@ def hasil_bagus(monkeypatch):
 
 @pytest.fixture
 def dependent(client, auth_headers):
-    """Dependent yang dikelola `registered_user`."""
-    family = client.post(
-        FAMILIES, json={"name": "Keluarga"}, headers=auth_headers
-    ).json()
+    """Profil anggota lain dalam akun `registered_user`."""
     response = client.post(
-        f"{FAMILIES}/{family['id']}/dependents",
-        json={"full_name": "Anak"},
-        headers=auth_headers,
+        "/api/v1/profiles", json={"full_name": "Anak"}, headers=auth_headers
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -84,6 +78,7 @@ def dependent(client, auth_headers):
 
 @pytest.fixture
 def orang_lain(client):
+    """Akun terpisah — dipakai membuktikan batas antar-akun."""
     response = client.post(
         "/api/v1/auth/register",
         json={
@@ -94,7 +89,7 @@ def orang_lain(client):
     )
     token = response.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
-    user_id = client.get("/api/v1/users/me", headers=headers).json()["id"]
+    user_id = client.get("/api/v1/profiles/me", headers=headers).json()["id"]
     return {"headers": headers, "id": user_id}
 
 
@@ -149,25 +144,25 @@ class TestMeasureOnBehalf:
     def test_admin_can_measure_own_dependent(
         self, client, auth_headers, storage, hasil_bagus, dependent, db_session
     ) -> None:
-        response = upload(client, auth_headers, data={"user_id": dependent["id"]})
+        response = upload(client, auth_headers, data={"family_member_id": dependent["id"]})
         assert response.status_code == 202, response.text
 
         session = db_session.execute(select(MeasurementSession)).scalar_one()
-        assert str(session.user_id) == dependent["id"]
-        assert str(session.initiated_by_user_id) != dependent["id"]
+        assert str(session.family_member_id) == dependent["id"]
+        assert str(session.initiated_by_family_member_id) != dependent["id"]
 
     def test_cannot_measure_unrelated_user(
         self, client, auth_headers, storage, hasil_bagus, orang_lain
     ) -> None:
         """Mengukur orang yang bukan dependent-nya = menulis data kesehatan
         atas nama orang lain."""
-        response = upload(client, auth_headers, data={"user_id": orang_lain["id"]})
+        response = upload(client, auth_headers, data={"family_member_id": orang_lain["id"]})
         assert response.status_code == 403
 
     def test_cannot_measure_nonexistent_user(
         self, client, auth_headers, storage, hasil_bagus
     ) -> None:
-        response = upload(client, auth_headers, data={"user_id": str(uuid.uuid4())})
+        response = upload(client, auth_headers, data={"family_member_id": str(uuid.uuid4())})
         assert response.status_code in (403, 404)
 
     def test_self_measurement_sets_both_ids_same(
@@ -175,7 +170,7 @@ class TestMeasureOnBehalf:
     ) -> None:
         upload(client, auth_headers)
         session = db_session.execute(select(MeasurementSession)).scalar_one()
-        assert session.user_id == session.initiated_by_user_id
+        assert session.family_member_id == session.initiated_by_family_member_id
 
 
 # --- Pemrosesan ------------------------------------------------------------
@@ -198,9 +193,9 @@ class TestProcessing:
     ) -> None:
         """user_id di vitals_readings harus subjek, bukan yang mengukur —
         kalau tertukar, data anak masuk ke grafik orang tuanya."""
-        upload(client, auth_headers, data={"user_id": dependent["id"]})
+        upload(client, auth_headers, data={"family_member_id": dependent["id"]})
         reading = db_session.execute(select(VitalsReading)).scalars().first()
-        assert str(reading.user_id) == dependent["id"]
+        assert str(reading.family_member_id) == dependent["id"]
 
     def test_status_becomes_completed(
         self, client, auth_headers, storage, hasil_bagus, db_session
@@ -260,11 +255,11 @@ class TestProcessing:
         from app.db.models import Anomaly, Baseline
         import app.services.measurement as measurement_service
 
-        me = db_session.execute(select(User)).scalars().first()
+        me = db_session.execute(select(FamilyMember)).scalars().first()
         now = datetime.now(UTC)
         db_session.add(
             Baseline(
-                user_id=me.id,
+                family_member_id=me.id,
                 metric_type="heart_rate",
                 mean_value=70.0,
                 stddev_value=5.0,
@@ -292,7 +287,7 @@ class TestProcessing:
     def test_no_anomaly_during_cold_start(
         self, client, auth_headers, storage, monkeypatch, db_session
     ) -> None:
-        """User baru tanpa baseline aktif tidak boleh dapat alert."""
+        """FamilyMember baru tanpa baseline aktif tidak boleh dapat alert."""
         from app.db.models import Anomaly
         import app.services.measurement as measurement_service
 
@@ -482,9 +477,9 @@ class TestListSessions:
         activities, dan anomalies. Daftar kosong terbaca seolah orangnya
         belum pernah mengukur."""
         upload(client, auth_headers)
-        me = client.get("/api/v1/users/me", headers=auth_headers).json()["id"]
+        me = client.get("/api/v1/profiles/me", headers=auth_headers).json()["id"]
         response = client.get(
-            f"{MEASUREMENTS}?user_id={me}", headers=orang_lain["headers"]
+            f"{MEASUREMENTS}?family_member_id={me}", headers=orang_lain["headers"]
         )
         assert response.status_code == 403
 
