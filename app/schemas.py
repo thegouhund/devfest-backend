@@ -121,6 +121,48 @@ class FamilyMemberUpdateRequest(BaseModel):
     role: Literal["admin", "member"]
 
 
+class MeasurementAcceptedResponse(BaseModel):
+    """Balasan 202: pemrosesan berjalan di background, bukan inline."""
+
+    session_id: uuid.UUID
+    processing_status: str
+
+
+class MeasurementSessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    capture_method: str
+    processing_status: str
+    signal_quality_flag: str | None
+    signal_quality_score: float | None
+    started_at: datetime
+    ended_at: datetime | None
+    duration_seconds: int | None
+
+
+class MeasurementListResponse(BaseModel):
+    sessions: list[MeasurementSessionResponse]
+    total: int
+
+
+class ReadingResponse(BaseModel):
+    metric_type: str
+    value: float
+    unit: str | None
+
+
+class MeasurementResultResponse(BaseModel):
+    session_id: uuid.UUID
+    recorded_at: datetime | None
+    signal_quality_score: float | None
+    signal_quality_flag: str | None
+    readings: list[ReadingResponse]
+    # Wajib ditampilkan di layar hasil (PRD FR-1.6).
+    disclaimer: str
+
+
 class DependentCreateRequest(BaseModel):
     """Profil anggota keluarga yang tidak punya akun sendiri (anak/lansia).
 

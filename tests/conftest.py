@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base
+from app.db.seed import seed_metric_types
 from app.db.session import get_db
 from app.main import app
 
@@ -36,6 +37,11 @@ def db_session():
     Base.metadata.create_all(engine)
     TestingSession = sessionmaker(bind=engine, class_=Session, autoflush=False)
     with TestingSession() as session:
+        # Di produksi `metric_types` diisi migrasi Alembic; di sini skema
+        # dibuat lewat create_all, jadi seed-nya harus dipanggil manual —
+        # tanpa ini penulisan vitals_readings gagal karena foreign key.
+        seed_metric_types(session)
+        session.commit()
         yield session
     engine.dispose()
 
@@ -45,6 +51,8 @@ def client(db_session, monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
     monkeypatch.setenv("JWT_SECRET", "secret-khusus-test")
+    # Tanpa ini tiap TestClient memuat JAX (~20 detik) saat startup.
+    monkeypatch.setenv("WARM_UP_RPPG_ON_START", "false")
     get_settings.cache_clear()
 
     app.dependency_overrides[get_db] = lambda: db_session

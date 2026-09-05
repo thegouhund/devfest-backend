@@ -22,6 +22,10 @@ class Settings(BaseModel):
 
     backend_cors_origins: str
 
+    # Pemanasan model rPPG saat startup. Dimatikan di test supaya suite
+    # tidak memuat JAX ratusan kali.
+    warm_up_rppg_on_start: bool
+
     # Anomaly detection tunables (PRD FR-3.2 / A3) — thresholds are still open items
     # in PRD §13, so they stay configurable rather than baked into the detector.
     anomaly_zscore_threshold: float
@@ -54,6 +58,8 @@ def get_settings() -> Settings:
             "BACKEND_CORS_ORIGINS",
             "http://localhost:5173,http://localhost:3000",
         ),
+        warm_up_rppg_on_start=getenv("WARM_UP_RPPG_ON_START", "true").lower()
+        not in ("false", "0", "no"),
         anomaly_zscore_threshold=float(getenv("ANOMALY_ZSCORE_THRESHOLD", "2.0")),
         baseline_cold_start_days=int(getenv("BASELINE_COLD_START_DAYS", "14")),
     )
