@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import MeasurementSession, User, VitalsReading
 from app.db.session import SessionLocal
+from app.services.anomaly import detect_for_session
 from app.services.baseline import recompute_all_metrics
 from app.services.rppg import RppgError, SignalQualityError, extract_vitals
 from app.services.video_storage import save_video
@@ -169,6 +170,14 @@ def _store_result(db: Session, session: MeasurementSession, result) -> None:
     # tidak boleh membatalkan pengukuran yang sudah berhasil disimpan.
     try:
         recompute_all_metrics(db, session.user_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    # Deteksi anomali memakai baseline yang baru saja diperbarui. Sama
+    # seperti di atas: gagal mendeteksi tidak boleh menghapus hasil ukur.
+    try:
+        detect_for_session(db, session.id)
         db.commit()
     except Exception:
         db.rollback()

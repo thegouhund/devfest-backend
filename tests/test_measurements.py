@@ -250,6 +250,62 @@ class TestProcessing:
         assert session.processing_status == "completed"
         assert db_session.execute(select(VitalsReading)).first() is not None
 
+    def test_anomaly_detected_against_existing_baseline(
+        self, client, auth_headers, storage, monkeypatch, db_session
+    ) -> None:
+        """Pengukuran yang jauh menyimpang harus memunculkan anomali,
+        memakai baseline yang sudah aktif."""
+        from datetime import UTC, datetime, timedelta
+
+        from app.db.models import Anomaly, Baseline
+        import app.services.measurement as measurement_service
+
+        me = db_session.execute(select(User)).scalars().first()
+        now = datetime.now(UTC)
+        db_session.add(
+            Baseline(
+                user_id=me.id,
+                metric_type="heart_rate",
+                mean_value=70.0,
+                stddev_value=5.0,
+                sample_count=30,
+                window_start=now - timedelta(days=30),
+                window_end=now + timedelta(days=1),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        melonjak = ExtractionResult(
+            heart_rate=130.0, quality_score=0.9, quality_flag="good"
+        )
+        monkeypatch.setattr(
+            measurement_service, "extract_vitals", lambda path: melonjak
+        )
+
+        upload(client, auth_headers)
+        db_session.expire_all()
+        anomalies = db_session.execute(select(Anomaly)).scalars().all()
+        assert len(anomalies) == 1
+        assert anomalies[0].severity == "high"
+
+    def test_no_anomaly_during_cold_start(
+        self, client, auth_headers, storage, monkeypatch, db_session
+    ) -> None:
+        """User baru tanpa baseline aktif tidak boleh dapat alert."""
+        from app.db.models import Anomaly
+        import app.services.measurement as measurement_service
+
+        melonjak = ExtractionResult(
+            heart_rate=130.0, quality_score=0.9, quality_flag="good"
+        )
+        monkeypatch.setattr(
+            measurement_service, "extract_vitals", lambda path: melonjak
+        )
+
+        upload(client, auth_headers)
+        assert db_session.execute(select(Anomaly)).first() is None
+
     def test_partial_result_stores_available_metrics(
         self, client, auth_headers, storage, monkeypatch, db_session
     ) -> None:
