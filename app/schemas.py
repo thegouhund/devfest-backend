@@ -203,6 +203,62 @@ class MeasurementResultResponse(BaseModel):
         return as_utc(value)
 
 
+class RelatedActivityResponse(BaseModel):
+    """Aktivitas yang mungkin memicu anomali (FR-3.3)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    category: str
+    quantity: float | None
+    unit: str | None
+    note: str | None
+    occurred_at: datetime
+
+    @field_serializer("occurred_at")
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class AnomalyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    metric_type: str
+    observed_value: float
+    baseline_mean: float
+    baseline_stddev: float
+    deviation_score: float
+    severity: str
+    status: str
+    detected_at: datetime
+
+    @field_serializer("detected_at")
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class AnomalyDetailResponse(AnomalyResponse):
+    measurement_session_id: uuid.UUID | None
+    related_activity: RelatedActivityResponse | None
+
+
+class AnomalyListResponse(BaseModel):
+    anomalies: list[AnomalyResponse]
+    total: int
+
+
+class AnomalyUpdateRequest(BaseModel):
+    """Perubahan status yang diizinkan.
+
+    `new` sengaja tidak ada: mengembalikannya akan membuat anomali lama
+    muncul lagi sebagai belum dibaca.
+    """
+
+    status: Literal["acknowledged", "dismissed"]
+
+
 class TelegramLinkResponse(BaseModel):
     link_code: str
     bot_username: str | None

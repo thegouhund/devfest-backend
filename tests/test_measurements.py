@@ -475,6 +475,19 @@ class TestListSessions:
         body = client.get(MEASUREMENTS, headers=orang_lain["headers"]).json()
         assert body["total"] == 0
 
+    def test_inaccessible_user_forbidden(
+        self, client, auth_headers, storage, hasil_bagus, orang_lain
+    ) -> None:
+        """403 utuh, bukan daftar kosong — konsisten dengan endpoint vitals,
+        activities, dan anomalies. Daftar kosong terbaca seolah orangnya
+        belum pernah mengukur."""
+        upload(client, auth_headers)
+        me = client.get("/api/v1/users/me", headers=auth_headers).json()["id"]
+        response = client.get(
+            f"{MEASUREMENTS}?user_id={me}", headers=orang_lain["headers"]
+        )
+        assert response.status_code == 403
+
     def test_pagination(self, client, auth_headers, storage, hasil_bagus) -> None:
         for _ in range(3):
             upload(client, auth_headers)

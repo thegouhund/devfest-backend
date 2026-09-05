@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.activities import router as activities_router
+from app.api.v1.anomalies import router as anomalies_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.families import router as families_router
 from app.api.v1.health import router as health_router
@@ -75,3 +76,6 @@ app.include_router(
     activities_router, prefix="/api/v1/activities", tags=["activities"]
 )
 app.include_router(telegram_router, prefix="/api/v1/telegram", tags=["telegram"])
+app.include_router(
+    anomalies_router, prefix="/api/v1/anomalies", tags=["anomalies"]
+)

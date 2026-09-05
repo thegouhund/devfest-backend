@@ -159,9 +159,18 @@ def list_measurements(
     db: Session = Depends(get_db),
 ) -> MeasurementListResponse:
     visible = accessible_user_ids(db, current_user.id, "vitals")
+
     if user_id is not None:
-        # Irisan, bukan pengganti: filter tidak boleh memperluas akses.
-        visible &= {user_id}
+        if user_id not in visible:
+            # 403 utuh, bukan 200 dengan daftar kosong: daftar kosong
+            # terbaca "orang ini belum pernah mengukur", padahal jawaban
+            # sebenarnya "Anda tidak berhak tahu". Disamakan dengan
+            # perilaku endpoint vitals, activities, dan anomalies.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anda tidak punya akses ke data user ini",
+            )
+        visible = {user_id}
 
     condition = MeasurementSession.user_id.in_(visible)
     total = db.execute(
