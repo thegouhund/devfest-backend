@@ -96,6 +96,7 @@ def add_session(
     *,
     heart_rate: float = 72.0,
     respiration_rate: float | None = 16.0,
+    hrv_rmssd: float | None = None,
 ) -> MeasurementSession:
     session = MeasurementSession(
         family_member_id=user.id,
@@ -126,6 +127,17 @@ def add_session(
                 metric_type="respiration_rate",
                 value=respiration_rate,
                 unit="breaths_per_min",
+            )
+        )
+    if hrv_rmssd is not None:
+        db.add(
+            VitalsReading(
+                measurement_session_id=session.id,
+                family_member_id=user.id,
+                recorded_at=moment,
+                metric_type="hrv_rmssd",
+                value=hrv_rmssd,
+                unit="ms",
             )
         )
     db.commit()
@@ -345,6 +357,50 @@ class TestDetectForSession:
         import uuid
 
         assert detect_for_session(db_session, uuid.uuid4()) == []
+
+    def test_hrv_reading_feeds_bpm_variance(
+        self, db_session, user, hr_baseline, now, monkeypatch
+    ) -> None:
+        """`hrv_rmssd` dari sesi ini harus benar-benar sampai ke model
+        sebagai bpm_variance, bukan diam-diam jatuh ke default 0."""
+        import app.services.anomaly as anomaly_module
+
+        captured: dict = {}
+        original = anomaly_module.evaluate_session
+
+        def spy(**kwargs):
+            captured.update(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(anomaly_module, "evaluate_session", spy)
+
+        session = add_session(
+            db_session, user, now, heart_rate=115.0, hrv_rmssd=42.5
+        )
+        detect_for_session(db_session, session.id)
+        db_session.commit()
+
+        assert captured["bpm_variance"] == pytest.approx(42.5)
+
+    def test_missing_hrv_reading_falls_back_to_default(
+        self, db_session, user, hr_baseline, now, monkeypatch
+    ) -> None:
+        import app.services.anomaly as anomaly_module
+
+        captured: dict = {}
+        original = anomaly_module.evaluate_session
+
+        def spy(**kwargs):
+            captured.update(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(anomaly_module, "evaluate_session", spy)
+
+        session = add_session(db_session, user, now, heart_rate=115.0)
+        detect_for_session(db_session, session.id)
+        db_session.commit()
+
+        assert captured["bpm_variance"] == anomaly_module.DEFAULT_BPM_VARIANCE
 
 
 # --- Konteks aktivitas --------------------------------------------------------

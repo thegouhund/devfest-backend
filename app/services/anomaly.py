@@ -58,11 +58,16 @@ ACTIVITY_LEVEL_SCORE = {
 }
 DEFAULT_ACTIVITY_LEVEL_SCORE = 0
 
-# devfest-ml tidak punya sinyal untuk variasi BPM DALAM satu sesi
-# pengukuran — open-rppg hanya mengembalikan satu angka HR per sesi, bukan
-# rangkaian waktu. Diisi 0 (netral) sampai ada sumber datanya.
-# ponytail: kalau open-rppg nanti mengekspos rangkaian BPM per frame,
-# hitung stddev-nya di sini alih-alih hardcode 0.
+# `bpm_variance` di data latih devfest-ml berlabel "HRV Proxy" di notebook
+# risetnya (lihat scatter plot delta_bpm vs bpm_variance) — bukan variance
+# BPM murni dalam satu sesi. `hrv_rmssd` dari open-rppg mengukur hal yang
+# sama (variabilitas detak jantung), jadi dipakai sebagai pengganti.
+#
+# ponytail: bukan definisi identik. Training data berskala puluhan (mis.
+# 40-50), sementara HRV RMSSD asli manusia berskala ms (umum 20-80ms) —
+# unit dan rentangnya berbeda, tapi arahnya sama (naik saat variabilitas
+# tinggi). Latih ulang model dengan hrv_rmssd asli kalau presisi ambang
+# jadi masalah di lapangan.
 DEFAULT_BPM_VARIANCE = 0.0
 
 # Pemetaan skor anomali model ke tingkat keparahan (ERD §2.9). Ambang model
@@ -190,12 +195,17 @@ def detect_for_session(db: Session, session_id: uuid.UUID) -> list[Anomaly]:
         else 0.0
     )
 
+    hrv_reading = readings.get("hrv_rmssd")
+
     detection = evaluate_session(
         heart_rate=float(heart_rate_reading.value),
         respiration_rate=respiration_rate,
         baseline_mean_bpm=float(hr_baseline.mean_value),
         baseline_stddev_bpm=float(hr_baseline.stddev_value),
         delta_rr=delta_rr,
+        bpm_variance=(
+            float(hrv_reading.value) if hrv_reading else DEFAULT_BPM_VARIANCE
+        ),
         activity_level_score=_activity_level_score(db, session),
     )
     if detection is None:

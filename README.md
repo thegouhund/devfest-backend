@@ -328,13 +328,17 @@ napas dilihat bersamaan, bukan sendiri-sendiri seperti z-score:
 | `delta_bpm` | Detak jantung sesi ini − rata-rata baseline 30 hari |
 | `delta_rr` | Laju napas sesi ini − rata-rata baseline 30 hari (0 kalau baseline napas belum lewat cold-start) |
 | `bpm_to_rr_ratio` | Detak jantung ÷ laju napas |
-| `bpm_variance` | **Selalu 0** — open-rppg belum mengekspos rangkaian BPM per sesi untuk dihitung variance-nya |
+| `bpm_variance` | `hrv_rmssd` dari sesi yang sama (0 kalau sesi tidak menghasilkan HRV) |
 | `activity_level_score` | 0–3, diturunkan dari kategori `ActivityLog` terdekat sebelum pengukuran (olahraga tertinggi, tidur terendah) |
 
 > [!NOTE]
-> `bpm_variance` yang selalu 0 adalah keterbatasan yang diketahui, ditandai `ponytail:`
-> di `app/services/anomaly.py`. Perbaiki begitu ada sumber datanya (mis. open-rppg
-> mengekspos BPM per frame dalam satu sesi).
+> `bpm_variance` di data latih devfest-ml berlabel "HRV Proxy" di notebook risetnya,
+> bukan variance BPM murni dalam satu sesi. `hrv_rmssd` dari open-rppg mengukur hal
+> yang sama (variabilitas detak jantung) sehingga dipakai sebagai pengganti — tapi
+> bukan definisi identik: skala training data (puluhan) berbeda dari HRV RMSSD asli
+> manusia (umumnya 20–80ms). Ditandai `ponytail:` di `app/services/anomaly.py`;
+> latih ulang model dengan `hrv_rmssd` asli kalau presisi ambang jadi masalah di
+> lapangan.
 
 `activity_level_score` mengalir dari fitur yang sama dipakai tombol quick-menu maupun
 chatbot — keduanya menulis ke tabel `activities_log` yang sama, jadi tidak ada jalur
