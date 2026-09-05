@@ -20,6 +20,8 @@ from app.db.models import Account, FamilyMember
 REGISTER = "/api/v1/auth/register"
 LOGIN = "/api/v1/auth/login"
 SELECT_PROFILE = "/api/v1/auth/select-profile"
+CHECK_EMAIL = "/api/v1/auth/check-email"
+RESET_PASSWORD = "/api/v1/auth/reset-password"
 ME = "/api/v1/profiles/me"
 ACCOUNT_ME = "/api/v1/account/me"
 
@@ -162,6 +164,89 @@ class TestLogin:
             ACCOUNT_ME, headers={"Authorization": f"Bearer {token}"}
         )
         assert response.status_code == 200
+
+
+class TestCheckEmail:
+    def test_registered_email_returns_true(self, client, registered_user) -> None:
+        response = client.get(CHECK_EMAIL, params={"email": registered_user["email"]})
+        assert response.status_code == 200
+        assert response.json()["exists"] is True
+
+    def test_unregistered_email_returns_false(self, client) -> None:
+        response = client.get(CHECK_EMAIL, params={"email": "tidakada@example.com"})
+        assert response.status_code == 200
+        assert response.json()["exists"] is False
+
+    def test_case_insensitive(self, client, registered_user) -> None:
+        response = client.get(
+            CHECK_EMAIL, params={"email": registered_user["email"].upper()}
+        )
+        assert response.json()["exists"] is True
+
+    def test_no_authentication_required(self, client) -> None:
+        response = client.get(CHECK_EMAIL, params={"email": "siapapun@example.com"})
+        assert response.status_code == 200
+
+
+class TestResetPassword:
+    def test_resets_and_returns_token(self, client, registered_user) -> None:
+        response = client.post(
+            RESET_PASSWORD,
+            json={
+                "email": registered_user["email"],
+                "new_password": "password-baru-yang-kuat",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["access_token"]
+
+    def test_new_password_works_on_login(self, client, registered_user) -> None:
+        client.post(
+            RESET_PASSWORD,
+            json={
+                "email": registered_user["email"],
+                "new_password": "password-baru-yang-kuat",
+            },
+        )
+        response = client.post(
+            LOGIN,
+            data={
+                "username": registered_user["email"],
+                "password": "password-baru-yang-kuat",
+            },
+        )
+        assert response.status_code == 200
+
+    def test_old_password_stops_working(self, client, registered_user) -> None:
+        client.post(
+            RESET_PASSWORD,
+            json={
+                "email": registered_user["email"],
+                "new_password": "password-baru-yang-kuat",
+            },
+        )
+        response = client.post(
+            LOGIN,
+            data={
+                "username": registered_user["email"],
+                "password": registered_user["password"],
+            },
+        )
+        assert response.status_code == 401
+
+    def test_unknown_email_rejected(self, client) -> None:
+        response = client.post(
+            RESET_PASSWORD,
+            json={"email": "hantu@example.com", "new_password": "apa-saja-yang-kuat"},
+        )
+        assert response.status_code == 404
+
+    def test_short_password_rejected(self, client, registered_user) -> None:
+        response = client.post(
+            RESET_PASSWORD,
+            json={"email": registered_user["email"], "new_password": "pendek"},
+        )
+        assert response.status_code == 422
 
 
 # --- Pilih profil ----------------------------------------------------------

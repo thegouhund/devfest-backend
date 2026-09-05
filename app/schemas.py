@@ -77,6 +77,20 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class EmailCheckResponse(BaseModel):
+    exists: bool
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.lower()
+
+
 # --- Akun & profil ---------------------------------------------------------
 
 

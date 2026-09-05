@@ -23,8 +23,10 @@ from app.core.security import (
 from app.db.models import Account, FamilyMember
 from app.db.session import get_db
 from app.schemas import (
+    EmailCheckResponse,
     ProfileSelectRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     TokenResponse,
 )
 
@@ -91,6 +93,44 @@ def login(
             detail="Email atau password salah",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    return TokenResponse(access_token=create_access_token(account.id))
+
+
+@router.get("/check-email", response_model=EmailCheckResponse)
+def check_email(email: str, db: Session = Depends(get_db)) -> EmailCheckResponse:
+    """Cek apakah sebuah email sudah terdaftar.
+
+    ponytail: publik dan tanpa rate-limit atas permintaan eksplisit —
+    endpoint ini adalah user-enumeration yang disengaja, bukan bug. Tambah
+    rate-limit per-IP kalau mulai terlihat discraping.
+    """
+    existing = db.execute(
+        select(Account).where(func.lower(Account.email) == email.lower())
+    ).scalar_one_or_none()
+    return EmailCheckResponse(exists=existing is not None)
+
+
+@router.post("/reset-password", response_model=TokenResponse)
+def reset_password(
+    payload: ResetPasswordRequest, db: Session = Depends(get_db)
+) -> TokenResponse:
+    """Ganti password langsung lewat email, tanpa OTP atau token verifikasi.
+
+    ponytail: siapa pun yang tahu email seseorang bisa mereset passwordnya.
+    Tambahkan verifikasi (OTP/email link) begitu ada infrastruktur
+    pengiriman (SMTP/Telegram) — ini bukan alur yang aman untuk produksi.
+    """
+    account = db.execute(
+        select(Account).where(func.lower(Account.email) == payload.email)
+    ).scalar_one_or_none()
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Email tidak ditemukan"
+        )
+
+    account.password_hash = hash_password(payload.new_password)
+    db.commit()
 
     return TokenResponse(access_token=create_access_token(account.id))
 
