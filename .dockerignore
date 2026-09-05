@@ -1,0 +1,13 @@
+.git
+.env
+__pycache__
+*.pyc
+.venv
+tests
+tasks
+data
+.chainlit
+.files
+.pytest_cache
+*.db
+README.md

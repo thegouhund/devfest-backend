@@ -1,21 +1,117 @@
 services:
-  db:
-    # Image TimescaleDB sudah termasuk pgvector, jadi cukup satu container
-    # untuk kedua ekstensi yang dibutuhkan (ERD §2.7 dan §2.13).
-    image: timescale/timescaledb-ha:pg16
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    container_name: devfest-backend
+    # Migrasi dijalankan sebelum server start, supaya deploy tidak pernah
+    # menyalakan aplikasi di atas skema yang tertinggal versi.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 3000"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: devfest
-    ports:
-      - "5432:5432"
+      # Driver +psycopg wajib: SQLAlchemy 2.0 menolak skema `postgres://`.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
+      VIDEO_STORAGE_PATH: /data/videos
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      ANOMALY_ZSCORE_THRESHOLD: ${ANOMALY_ZSCORE_THRESHOLD:-2.0}
+      BASELINE_COLD_START_DAYS: ${BASELINE_COLD_START_DAYS:-14}
+      ENVIRONMENT: production
     volumes:
-      - db_data:/home/postgres/pgdata/data
+      # Video wajah adalah data biometrik — disimpan di volume, tidak ikut
+      # image, dan tidak hilang saat container dibangun ulang.
+      - videos:/data/videos
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - web_proxy
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web_proxy"
+      - "traefik.http.routers.devfest-backend.rule=Host(`devfest-backend.gouhund.my.id`)"
+      - "traefik.http.routers.devfest-backend.entrypoints=websecure"
+      - "traefik.http.routers.devfest-backend.tls=true"
+      - "traefik.http.routers.devfest-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.devfest-backend.loadbalancer.server.port=3000"
+      - "traefik.http.routers.devfest-backend-http.rule=Host(`devfest-backend.gouhund.my.id`)"
+      - "traefik.http.routers.devfest-backend-http.entrypoints=web"
+      - "traefik.http.routers.devfest-backend-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+  # Chat berjalan sebagai proses terpisah (PRD A2), berbagi image dan
+  # database yang sama dengan API. Frontend meng-embed-nya sebagai iframe.
+  chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    container_name: devfest-chat
+    command: chainlit run chat_app.py --host 0.0.0.0 --port 8000 --headless
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Token yang sama dengan API, jadi rahasianya harus identik — kalau
+      # berbeda, token dari login akan ditolak di chat.
+      JWT_SECRET: ${JWT_SECRET}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      # Chat tidak memproses video, jadi tidak perlu memuat model rPPG.
+      WARM_UP_RPPG_ON_START: "false"
+      ENVIRONMENT: production
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks:
+      - web_proxy
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web_proxy"
+      - "traefik.http.routers.devfest-chat.rule=Host(`devfest-chat.gouhund.my.id`)"
+      - "traefik.http.routers.devfest-chat.entrypoints=websecure"
+      - "traefik.http.routers.devfest-chat.tls=true"
+      - "traefik.http.routers.devfest-chat.tls.certresolver=letsencrypt"
+      - "traefik.http.services.devfest-chat.loadbalancer.server.port=8000"
+      - "traefik.http.routers.devfest-chat-http.rule=Host(`devfest-chat.gouhund.my.id`)"
+      - "traefik.http.routers.devfest-chat-http.entrypoints=web"
+      - "traefik.http.routers.devfest-chat-http.middlewares=redirect-to-https"
+
+  db:
+    # Bukan postgres biasa: skema butuh TimescaleDB (hypertable vitals) dan
+    # pgvector (pencarian embedding). Image ini sudah memuat keduanya.
+    image: timescale/timescaledb-ha:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/home/postgres/pgdata/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d devfest"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - internal
 
 volumes:
-  db_data:
+  pgdata:
+  videos:
+
+networks:
+  web_proxy:
+    external: true
+  internal:
