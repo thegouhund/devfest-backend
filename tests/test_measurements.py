@@ -385,6 +385,25 @@ class TestFailurePaths:
         session = db_session.execute(select(MeasurementSession)).scalar_one()
         assert session.processing_status == "failed"
 
+    def test_failure_reason_is_logged(
+        self, client, auth_headers, storage, monkeypatch, caplog
+    ) -> None:
+        """Alasan kegagalan sebelumnya diterima `_mark_failed` tapi tidak
+        pernah disimpan atau dicatat kemana pun — sesi berakhir `failed`
+        tanpa jejak penyebabnya sama sekali. Sekarang minimal ter-log,
+        supaya bisa dilihat lewat `docker compose logs`."""
+        import app.services.measurement as measurement_service
+
+        def gagal(path):
+            raise RppgError("pencahayaan kurang")
+
+        monkeypatch.setattr(measurement_service, "extract_vitals", gagal)
+
+        with caplog.at_level("WARNING", logger="app.services.measurement"):
+            upload(client, auth_headers)
+
+        assert "pencahayaan kurang" in caplog.text
+
 
 # --- Status & hasil --------------------------------------------------------
 

@@ -12,11 +12,15 @@ Frontend melakukan polling; sesi yang menggantung berarti spinner selamanya.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+
+logger = logging.getLogger(__name__)
 
 from app.db.models import FamilyMember, MeasurementSession, VitalsReading
 from app.db.session import SessionLocal
@@ -205,6 +209,13 @@ def _mark_failed(
     reason: str,
     quality_flag: str | None = None,
 ) -> None:
+    # `reason` sebelumnya diterima tapi tidak pernah disimpan atau di-log —
+    # sesi berakhir `failed` tanpa jejak apa pun soal penyebabnya. Di-log
+    # di sini (bukan disimpan ke kolom baru) supaya cukup lewat
+    # `docker compose logs backend`, tanpa migrasi skema.
+    logger.warning(
+        "Sesi pengukuran %s gagal: %s", session.id, reason
+    )
     session.processing_status = "failed"
     session.ended_at = datetime.now(UTC)
     if quality_flag:
