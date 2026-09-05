@@ -50,7 +50,7 @@ def db_session():
 def client(db_session, monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
-    monkeypatch.setenv("JWT_SECRET", "secret-khusus-test")
+    monkeypatch.setenv("JWT_SECRET", "secret-khusus-test-yang-cukup-panjang-32b")
     # Tanpa ini tiap TestClient memuat JAX (~20 detik) saat startup.
     monkeypatch.setenv("WARM_UP_RPPG_ON_START", "false")
     get_settings.cache_clear()

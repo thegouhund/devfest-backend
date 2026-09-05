@@ -245,7 +245,7 @@ class TestDetect:
         from app.core.config import get_settings
 
         monkeypatch.setenv("ANOMALY_ZSCORE_THRESHOLD", "10.0")
-        monkeypatch.setenv("JWT_SECRET", "test")
+        monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
         get_settings.cache_clear()
 
         reading = add_reading(db_session, user, 95.0, now)

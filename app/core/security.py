@@ -26,6 +26,9 @@ ALGORITHM = "HS256"
 # bcrypt hanya membaca 72 byte pertama; sisanya diabaikan diam-diam.
 BCRYPT_MAX_BYTES = 72
 
+# Panjang minimum kunci HMAC-SHA256 menurut RFC 7518 §3.2.
+MIN_JWT_SECRET_BYTES = 32
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 credentials_error = HTTPException(
@@ -36,13 +39,25 @@ credentials_error = HTTPException(
 
 
 def _jwt_secret() -> str:
-    """Secret kosong berarti token bisa dipalsukan siapa saja, jadi lebih
-    baik gagal keras saat dipakai daripada menandatangani dengan string kosong."""
+    """Secret kosong atau terlalu pendek berarti token bisa dipalsukan,
+    jadi lebih baik gagal keras saat dipakai.
+
+    Panjang minimum mengikuti RFC 7518 §3.2 untuk HMAC-SHA256. PyJWT hanya
+    memberi peringatan untuk kunci pendek, dan peringatan tenggelam di log
+    produksi — padahal kunci lemah bisa dipecahkan brute force, dan siapa
+    pun yang berhasil bisa memalsukan token untuk membaca data kesehatan
+    seluruh keluarga.
+    """
     secret = get_settings().jwt_secret
+    perintah = 'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+
     if not secret:
+        raise RuntimeError(f"JWT_SECRET belum di-set. Generate dengan: {perintah}")
+
+    if len(secret.encode()) < MIN_JWT_SECRET_BYTES:
         raise RuntimeError(
-            "JWT_SECRET belum di-set. Generate dengan: "
-            'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            f"JWT_SECRET terlalu pendek ({len(secret.encode())} byte, minimal "
+            f"{MIN_JWT_SECRET_BYTES}). Generate dengan: {perintah}"
         )
     return secret
 

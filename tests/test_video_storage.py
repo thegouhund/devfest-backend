@@ -38,7 +38,7 @@ def storage_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     root = tmp_path / "videos"
     monkeypatch.setenv("VIDEO_STORAGE_PATH", str(root))
-    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
     get_settings.cache_clear()
     yield root
     get_settings.cache_clear()

@@ -46,9 +46,9 @@ def db():
 def secret(monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
-    monkeypatch.setenv("JWT_SECRET", "test-secret-key-for-signing")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-for-signing-cukup-panjang")
     get_settings.cache_clear()
-    yield "test-secret-key-for-signing"
+    yield "test-secret-key-for-signing-cukup-panjang"
     get_settings.cache_clear()
 
 
@@ -117,7 +117,7 @@ class TestAccessToken:
         from app.core.config import get_settings
 
         token = create_access_token(uuid.uuid4())
-        monkeypatch.setenv("JWT_SECRET", "secret-yang-berbeda")
+        monkeypatch.setenv("JWT_SECRET", "secret-yang-berbeda-tapi-cukup-panjang-32b")
         get_settings.cache_clear()
         with pytest.raises(HTTPException) as exc:
             decode_access_token(token)
@@ -149,6 +149,31 @@ class TestAccessToken:
         with pytest.raises(HTTPException) as exc:
             decode_access_token("bukan.token.jwt")
         assert exc.value.status_code == 401
+
+    def test_short_secret_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Kunci pendek bisa dipecahkan brute force, dan siapa pun yang
+        berhasil bisa memalsukan token untuk membaca data kesehatan
+        seluruh keluarga. PyJWT hanya memberi peringatan, yang tenggelam
+        di log produksi — jadi ditolak di sini."""
+        from app.core.config import get_settings
+
+        monkeypatch.setenv("JWT_SECRET", "pendek")
+        get_settings.cache_clear()
+        with pytest.raises(Exception) as exc:
+            create_access_token(uuid.uuid4())
+        assert "pendek" in str(exc.value).lower() or "byte" in str(exc.value).lower()
+        get_settings.cache_clear()
+
+    def test_recommended_secret_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Panjang yang disarankan .env.example harus lolos."""
+        import secrets as py_secrets
+
+        from app.core.config import get_settings
+
+        monkeypatch.setenv("JWT_SECRET", py_secrets.token_urlsafe(32))
+        get_settings.cache_clear()
+        assert create_access_token(uuid.uuid4())
+        get_settings.cache_clear()
 
     def test_missing_secret_fails_loudly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """JWT_SECRET kosong harus error jelas, bukan diam-diam

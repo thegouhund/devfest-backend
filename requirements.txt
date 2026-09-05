@@ -30,6 +30,13 @@ scipy==1.18.1
 # open-rppg masih memakai pkg_resources, yang dihapus di setuptools >= 81.
 setuptools==80.10.2
 
+# --- Chatbot (Fase 2) ---
+# DeepSeek dipakai lewat antarmuka kompatibel-OpenAI; ganti penyedia cukup
+# menukar LLM_BASE_URL dan LLM_MODEL.
+langchain==1.3.14
+langchain-openai==1.4.1
+chainlit==2.12.0
+
 # --- Testing ---
 pytest==8.3.4
 httpx==0.28.1

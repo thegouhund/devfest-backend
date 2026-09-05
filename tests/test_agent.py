@@ -20,7 +20,7 @@ def api_key(monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "kunci-uji")
-    monkeypatch.setenv("JWT_SECRET", "test")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -36,7 +36,7 @@ class TestChatModelFactory:
         from app.core.config import get_settings
 
         monkeypatch.setenv("DEEPSEEK_API_KEY", "")
-        monkeypatch.setenv("JWT_SECRET", "test")
+        monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
         get_settings.cache_clear()
 
         with pytest.raises(ChatUnavailable):
@@ -54,7 +54,7 @@ class TestChatModelFactory:
 
         monkeypatch.setenv("DEEPSEEK_API_KEY", "kunci-uji")
         monkeypatch.setenv("LLM_BASE_URL", "https://contoh-provider-lain.test")
-        monkeypatch.setenv("JWT_SECRET", "test")
+        monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
         get_settings.cache_clear()
 
         model = get_chat_model()
@@ -118,7 +118,7 @@ class TestBuildAgent:
         from app.db.models import User
 
         monkeypatch.setenv("DEEPSEEK_API_KEY", "")
-        monkeypatch.setenv("JWT_SECRET", "test")
+        monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
         get_settings.cache_clear()
 
         user = User(full_name="Budi", email="budi@example.com")

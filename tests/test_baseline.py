@@ -101,7 +101,7 @@ class TestColdStart:
         from app.core.config import get_settings
 
         monkeypatch.setenv("BASELINE_COLD_START_DAYS", "3")
-        monkeypatch.setenv("JWT_SECRET", "test")
+        monkeypatch.setenv("JWT_SECRET", "test-secret-yang-cukup-panjang-untuk-hmac")
         get_settings.cache_clear()
 
         add_readings(db_session, user, daily(now, [70.0, 72.0, 74.0, 71.0, 73.0]))

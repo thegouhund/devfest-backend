@@ -44,7 +44,7 @@ def storage(tmp_path, monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
     monkeypatch.setenv("VIDEO_STORAGE_PATH", str(tmp_path / "videos"))
-    monkeypatch.setenv("JWT_SECRET", "secret-khusus-test")
+    monkeypatch.setenv("JWT_SECRET", "secret-khusus-test-yang-cukup-panjang-32b")
     get_settings.cache_clear()
     yield tmp_path
     get_settings.cache_clear()
