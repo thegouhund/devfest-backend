@@ -19,11 +19,14 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     Text,
     UniqueConstraint,
     Uuid,
+    column,
+    func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -62,10 +65,22 @@ class User(Base):
     self-FK `managed_by_user_id`, jadi tidak perlu tabel terpisah."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        # Keunikan email ditegakkan tanpa memandang huruf besar-kecil, di
+        # level database. Normalisasi di schema saja tidak cukup: jalur lain
+        # (seed, import, pembuatan profil dependent) tidak melewatinya.
+        Index(
+            "uq_users_email_lower",
+            func.lower(column("email")),
+            unique=True,
+            sqlite_where=column("email").isnot(None),
+            postgresql_where=column("email").isnot(None),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = pk()
     # Nullable: dependent tidak punya kredensial sendiri.
-    email: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone: Mapped[str | None] = mapped_column(Text, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     full_name: Mapped[str] = mapped_column(Text, nullable=False)

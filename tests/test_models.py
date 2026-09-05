@@ -220,6 +220,33 @@ def test_vitals_reading_requires_known_metric(engine) -> None:
             db.commit()
 
 
+def test_email_unique_ignoring_case(engine) -> None:
+    """Keunikan email harus ditegakkan database, bukan hanya schema Pydantic —
+    seed, import, dan pembuatan profil dependent tidak lewat validasi schema."""
+    with Session(engine) as db:
+        db.add(User(full_name="A", email="budi@example.com"))
+        db.commit()
+        db.add(User(full_name="B", email="BUDI@example.com"))
+        with pytest.raises(IntegrityError):
+            db.commit()
+
+
+def test_multiple_users_without_email_allowed(engine) -> None:
+    """Dependent tidak punya email; banyak NULL harus tetap boleh berdampingan."""
+    with Session(engine) as db:
+        admin = User(full_name="Admin", email="admin@example.com")
+        db.add(admin)
+        db.flush()
+        db.add_all(
+            [
+                User(full_name="Anak 1", is_dependent=True, managed_by_user_id=admin.id),
+                User(full_name="Anak 2", is_dependent=True, managed_by_user_id=admin.id),
+            ]
+        )
+        db.commit()
+        assert db.query(User).count() == 3
+
+
 def test_dependent_user_has_no_credentials(engine) -> None:
     """ERD §2.1: email & password_hash nullable supaya dependent bisa tanpa login."""
     with Session(engine) as db:
