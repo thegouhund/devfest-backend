@@ -36,7 +36,6 @@ setuptools==80.10.2
 # menukar LLM_BASE_URL dan LLM_MODEL.
 langchain==1.3.14
 langchain-openai==1.4.1
-chainlit==2.12.0
 
 # --- Testing ---
 pytest==8.3.4

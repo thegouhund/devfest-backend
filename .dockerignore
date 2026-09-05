@@ -6,8 +6,6 @@ __pycache__
 tests
 tasks
 data
-.chainlit
-.files
 .pytest_cache
 *.db
 README.md

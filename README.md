@@ -86,7 +86,6 @@ Dirancang untuk satu keluarga (2–8 anggota), tapi skemanya sudah *multi-family
 | [bcrypt](https://github.com/pyca/bcrypt/) | 4.2 | Hashing password |
 | [LangChain](https://www.langchain.com/) | 1.3 | Orkestrasi agent & tool-calling |
 | [DeepSeek](https://www.deepseek.com/) | — | LLM chatbot, lewat antarmuka kompatibel-OpenAI |
-| [Chainlit](https://chainlit.io/) | 2.12 | UI chat, proses terpisah yang di-embed sebagai iframe |
 | [open-rppg](https://pypi.org/project/open-rppg/) | 0.1 | Ekstraksi vital sign dari video wajah |
 
 ### Kenapa TimescaleDB dan pgvector?
@@ -170,29 +169,21 @@ uvicorn app.main:app --reload
 > tidak menanggung waktu kompilasi — terukur turun dari 24 detik jadi 1 detik.
 > Saat pengembangan, `WARM_UP_RPPG_ON_START=false` membuat startup langsung siap.
 
-### 7. Jalankan chatbot (opsional)
+### 7. Chatbot (opsional)
 
-Chat berjalan sebagai **proses terpisah**, bukan bagian dari API:
+Chat memakai endpoint REST biasa, jadi tidak ada proses tambahan yang perlu
+dijalankan — cukup isi `DEEPSEEK_API_KEY`, lalu:
 
 ```bash
-chainlit run chat_app.py --port 8001
+POST /api/v1/chat            # kirim pesan, terima balasan
+GET  /api/v1/chat/conversations       # daftar sesi
+GET  /api/v1/chat/conversations/{id}  # isi satu sesi
 ```
 
-Frontend meng-embed-nya sebagai iframe dengan token yang sama:
-
-```jsx
-<iframe src={`http://localhost:8001?token=${accessToken}`} />
-```
-
-Di produksi, chat dilayani di bawah path `/chat` pada domain yang sama
-dengan API — jadi cukup satu DNS record:
-
-```jsx
-<iframe src={`${API_URL}/chat?token=${accessToken}`} />
-```
-
-Butuh `DEEPSEEK_API_KEY`. Tanpa itu, chat menolak dengan pesan yang jelas
-sementara API utama tetap berjalan normal — chatbot adalah tambahan, bukan syarat.
+Frontend memanggilnya seperti endpoint lain dan merender balasannya dengan
+komponen chat-nya sendiri. Tanpa API key, endpoint ini menjawab `503`
+sementara seluruh API lain tetap berjalan — chatbot adalah tambahan, bukan
+syarat.
 
 ---
 
@@ -222,9 +213,10 @@ kontrak untuk frontend ada di [`API_CONTRACT.md`](../devfest-md/API_CONTRACT.md)
 | **Anomali** | `GET /anomalies`, `GET /anomalies/{id}` | Daftar dan detail beserta konteks penyebab |
 | | `PATCH /anomalies/{id}` | Tandai sudah dibaca atau diabaikan |
 | **Telegram** | `POST\|DELETE /telegram/link`, `GET /telegram/status` | Sambungkan dan putuskan notifikasi |
+| **Chat** | `POST /chat` | Kirim pesan ke health companion |
+| | `GET /chat/conversations`, `GET /chat/conversations/{id}` | Riwayat percakapan sendiri |
 
-Semua endpoint di atas berprefiks `/api/v1`. Chat tidak lewat REST — lihat
-[langkah 7](#7-jalankan-chatbot-opsional).
+Semua endpoint di atas berprefiks `/api/v1`.
 
 ## Konfigurasi
 
@@ -271,13 +263,11 @@ devfest-backend/
 │   ├── chat/
 │   │   ├── agent.py      # Agent LangChain + prompt pengaman medis
 │   │   ├── llm.py        # Pabrik model, penyedia bisa ditukar
-│   │   ├── tools.py      # Tool di atas services/, id user diikat server
-│   │   └── session.py    # Autentikasi & siklus sesi chat
+│   │   └── tools.py      # Tool di atas services/, id user diikat server
 │   ├── services/         # Logika bisnis, dipakai ulang REST & chatbot
 │   ├── main.py           # Entry point FastAPI
 │   └── schemas.py        # Skema request/response
 ├── alembic/versions/     # File migrasi
-├── chat_app.py           # Aplikasi Chainlit, proses terpisah
 ├── tests/                # Test suite
 ├── docker-compose.yml    # PostgreSQL + TimescaleDB + pgvector
 └── requirements.txt

@@ -12,10 +12,6 @@ data/
 # Artefak perencanaan, bukan bagian dari codebase
 tasks/
 
-# Konfigurasi lokal Chainlit, dibuat otomatis saat pertama dijalankan
-.chainlit/
-.files/
-
 .pytest_cache/
 .coverage
 htmlcov/

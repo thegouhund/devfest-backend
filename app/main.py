@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.activities import router as activities_router
 from app.api.v1.anomalies import router as anomalies_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.chat import router as chat_router
 from app.api.v1.families import router as families_router
 from app.api.v1.health import router as health_router
 from app.api.v1.measurements import router as measurements_router
@@ -79,3 +80,4 @@ app.include_router(telegram_router, prefix="/api/v1/telegram", tags=["telegram"]
 app.include_router(
     anomalies_router, prefix="/api/v1/anomalies", tags=["anomalies"]
 )
+app.include_router(chat_router, prefix="/api/v1/chat", tags=["chat"])

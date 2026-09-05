@@ -259,6 +259,60 @@ class AnomalyUpdateRequest(BaseModel):
     status: Literal["acknowledged", "dismissed"]
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    # Kosongkan untuk memulai percakapan baru.
+    conversation_id: uuid.UUID | None = None
+
+    @field_validator("message")
+    @classmethod
+    def strip_message(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Pesan tidak boleh kosong")
+        return stripped
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    conversation_id: uuid.UUID
+
+
+class ChatMessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    role: str
+    content: str
+    created_at: datetime
+
+    @field_serializer("created_at")
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class ChatConversationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    started_at: datetime
+    ended_at: datetime | None
+    summary: str | None
+
+    @field_serializer("started_at", "ended_at")
+    def _utc(self, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class ChatConversationListResponse(BaseModel):
+    conversations: list[ChatConversationResponse]
+    total: int
+
+
+class ChatConversationDetailResponse(BaseModel):
+    id: uuid.UUID
+    messages: list[ChatMessageResponse]
+
+
 class TelegramLinkResponse(BaseModel):
     link_code: str
     bot_username: str | None

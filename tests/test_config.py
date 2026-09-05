@@ -82,9 +82,17 @@ def test_secrets_have_no_usable_default(secret: str, monkeypatch: pytest.MonkeyP
 
 
 def test_env_example_documents_every_setting() -> None:
+    """Setiap setting harus disebut di .env.example.
+
+    Baris yang dikomentari ikut dihitung: `DATABASE_URL` dan
+    `VIDEO_STORAGE_PATH` diatur otomatis oleh docker-compose, tapi tetap
+    perlu terlihat bagi yang menjalankan tanpa Docker.
+    """
     env_example = REPO_ROOT / ".env.example"
     assert env_example.exists(), ".env.example is required"
-    documented = set(re.findall(r"^([A-Z_]+)=", env_example.read_text(), re.MULTILINE))
+    documented = set(
+        re.findall(r"^#?\s*([A-Z_]+)=", env_example.read_text(), re.MULTILINE)
+    )
     expected = {
         ENV_VAR_OVERRIDES.get(name, name.upper()) for name in REQUIRED_SETTINGS
     }
