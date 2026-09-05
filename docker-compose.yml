@@ -56,7 +56,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     container_name: devfest-chat
-    command: chainlit run chat_app.py --host 0.0.0.0 --port 8000 --headless
+    # --root-path memberi tahu Chainlit bahwa ia dilayani di bawah /chat,
+    # supaya aset dan websocket-nya memakai path yang benar.
+    command: >
+      chainlit run chat_app.py --host 0.0.0.0 --port 8000
+      --headless --root-path /chat
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # Token yang sama dengan API, jadi rahasianya harus identik — kalau
@@ -79,14 +83,15 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=web_proxy"
-      - "traefik.http.routers.devfest-chat.rule=Host(`devfest-chat.gouhund.my.id`)"
+      # Domain yang sama dengan API, dipisah lewat path /chat. Prioritas
+      # lebih tinggi dari router backend supaya /chat tidak ikut tertangkap
+      # aturan Host() yang lebih umum.
+      - "traefik.http.routers.devfest-chat.rule=Host(`devfest-backend.gouhund.my.id`) && PathPrefix(`/chat`)"
+      - "traefik.http.routers.devfest-chat.priority=100"
       - "traefik.http.routers.devfest-chat.entrypoints=websecure"
       - "traefik.http.routers.devfest-chat.tls=true"
       - "traefik.http.routers.devfest-chat.tls.certresolver=letsencrypt"
       - "traefik.http.services.devfest-chat.loadbalancer.server.port=8000"
-      - "traefik.http.routers.devfest-chat-http.rule=Host(`devfest-chat.gouhund.my.id`)"
-      - "traefik.http.routers.devfest-chat-http.entrypoints=web"
-      - "traefik.http.routers.devfest-chat-http.middlewares=redirect-to-https"
 
   db:
     # Bukan postgres biasa: skema butuh TimescaleDB (hypertable vitals) dan

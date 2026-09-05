@@ -184,6 +184,13 @@ Frontend meng-embed-nya sebagai iframe dengan token yang sama:
 <iframe src={`http://localhost:8001?token=${accessToken}`} />
 ```
 
+Di produksi, chat dilayani di bawah path `/chat` pada domain yang sama
+dengan API — jadi cukup satu DNS record:
+
+```jsx
+<iframe src={`${API_URL}/chat?token=${accessToken}`} />
+```
+
 Butuh `DEEPSEEK_API_KEY`. Tanpa itu, chat menolak dengan pesan yang jelas
 sementara API utama tetap berjalan normal — chatbot adalah tambahan, bukan syarat.
 
