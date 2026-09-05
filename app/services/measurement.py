@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import MeasurementSession, User, VitalsReading
 from app.db.session import SessionLocal
+from app.services.baseline import recompute_all_metrics
 from app.services.rppg import RppgError, SignalQualityError, extract_vitals
 from app.services.video_storage import save_video
 
@@ -162,6 +163,15 @@ def _store_result(db: Session, session: MeasurementSession, result) -> None:
     session.processing_status = "completed"
     session.ended_at = recorded_at
     db.commit()
+
+    # Baseline dihitung ulang setelah data baru masuk, supaya "normal"
+    # seseorang selalu mengikuti kondisi terkininya. Kegagalan di sini
+    # tidak boleh membatalkan pengukuran yang sudah berhasil disimpan.
+    try:
+        recompute_all_metrics(db, session.user_id)
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
 def _mark_failed(

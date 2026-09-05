@@ -217,6 +217,39 @@ class TestProcessing:
         assert float(session.signal_quality_score) == pytest.approx(0.87)
         assert session.signal_quality_flag == "good"
 
+    def test_baseline_recomputed_after_measurement(
+        self, client, auth_headers, storage, hasil_bagus, db_session
+    ) -> None:
+        """Baseline harus ikut diperbarui, kalau tidak deteksi anomali
+        selalu membandingkan terhadap angka basi."""
+        from app.db.models import Baseline
+
+        upload(client, auth_headers)
+        baselines = db_session.execute(select(Baseline)).scalars().all()
+        assert {b.metric_type for b in baselines} == {
+            "heart_rate",
+            "hrv_rmssd",
+            "respiration_rate",
+        }
+
+    def test_baseline_failure_does_not_undo_measurement(
+        self, client, auth_headers, storage, hasil_bagus, monkeypatch, db_session
+    ) -> None:
+        """Pengukuran yang sudah tersimpan tidak boleh hilang hanya karena
+        perhitungan baseline gagal."""
+        import app.services.measurement as measurement_service
+
+        def gagal(db, user_id):
+            raise RuntimeError("hitung baseline gagal")
+
+        monkeypatch.setattr(measurement_service, "recompute_all_metrics", gagal)
+
+        upload(client, auth_headers)
+        db_session.expire_all()
+        session = db_session.execute(select(MeasurementSession)).scalar_one()
+        assert session.processing_status == "completed"
+        assert db_session.execute(select(VitalsReading)).first() is not None
+
     def test_partial_result_stores_available_metrics(
         self, client, auth_headers, storage, monkeypatch, db_session
     ) -> None:
