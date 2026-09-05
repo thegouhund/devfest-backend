@@ -66,8 +66,14 @@ def make_tools(session_factory, actor: FamilyMember) -> list:
     def _clamp_days(days: int) -> int:
         return max(1, min(days or DEFAULT_DAYS, MAX_DAYS))
 
-    def _resolve_subject(db, member_name: str | None) -> tuple[uuid.UUID | None, str | None]:
+    def _resolve_subject(
+        db, member_name: str | None, data_type: str = "vitals"
+    ) -> tuple[uuid.UUID | None, str | None]:
         """Terjemahkan nama anggota jadi id yang boleh dilihat pemanggil.
+
+        `data_type` menentukan setelan visibility yang dipakai (vitals vs
+        activities bisa disetel beda-beda per profil) — jangan hardcode ke
+        satu jenis untuk semua tool.
 
         Mengembalikan `(id, None)` bila boleh, atau `(None, pesan)` bila
         tidak — pesannya dikembalikan apa adanya ke model supaya ia
@@ -76,7 +82,7 @@ def make_tools(session_factory, actor: FamilyMember) -> list:
         if not member_name:
             return actor_id, None
 
-        visible = accessible_profile_ids(db, actor_id, "vitals")
+        visible = accessible_profile_ids(db, actor_id, data_type)
         kandidat = (
             db.execute(select(FamilyMember).where(FamilyMember.id.in_(visible)))
             .scalars()
@@ -144,19 +150,32 @@ def make_tools(session_factory, actor: FamilyMember) -> list:
 
     @tool
     def get_recent_activities(
-        days: int = DEFAULT_DAYS, category: str | None = None
+        days: int = DEFAULT_DAYS,
+        category: str | None = None,
+        member_name: str | None = None,
     ) -> str:
         """Ambil riwayat aktivitas harian user seperti kopi, olahraga, tidur,
         merokok, alkohol, atau makan. days adalah berapa hari ke belakang.
-        category diisi kalau user menanyakan satu jenis aktivitas saja."""
+        category diisi kalau user menanyakan satu jenis aktivitas saja.
+        member_name diisi hanya kalau user bertanya tentang anggota keluarga
+        lain; kosongkan untuk data user sendiri — walau user ini admin,
+        jangan tarik aktivitas seluruh keluarga kalau tidak diminta
+        eksplisit."""
         db = session_factory()
         try:
+            subject_id, penolakan = _resolve_subject(
+                db, member_name, data_type="activities"
+            )
+            if penolakan:
+                return penolakan
+
             end = datetime.now(UTC)
             start = end - timedelta(days=_clamp_days(days))
 
             rows, total = activity_service.list_activities(
                 db,
                 viewer_id=actor_id,
+                subject_id=subject_id,
                 category=category,
                 start=start,
                 end=end,

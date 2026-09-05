@@ -243,6 +243,43 @@ class TestActivityTools:
         hasil = tools["get_recent_activities"].invoke({"days": 7})
         assert "belum" in hasil.lower() or "tidak ada" in hasil.lower()
 
+    def test_admin_without_member_name_sees_only_own_activities(
+        self, session_factory, db_session, keluarga_dengan_data
+    ) -> None:
+        """Admin bertanya soal aktivitas tanpa menyebut nama anggota lain
+        harus hanya melihat catatannya sendiri — sama seperti
+        get_anomaly_events, tidak boleh diam-diam melebar ke seluruh
+        keluarga hanya karena penanya ini admin."""
+        ibu_tools = tools_for(
+            session_factory, db_session, keluarga_dengan_data["ibu"]["id"]
+        )
+        ibu_tools["log_activity"].invoke({"category": "exercise", "quantity": 30})
+
+        ayah_tools = tools_for(
+            session_factory, db_session, keluarga_dengan_data["ayah"]["id"]
+        )
+        hasil = ayah_tools["get_recent_activities"].invoke({"days": 7})
+        assert "exercise" not in hasil.lower()
+        assert "belum" in hasil.lower() or "tidak ada" in hasil.lower()
+
+    def test_admin_can_ask_for_other_member_activities_by_name(
+        self, session_factory, db_session, keluarga_dengan_data
+    ) -> None:
+        """Menyebut nama eksplisit tetap harus bisa, karena admin memang
+        berhak melihat aktivitas seluruh keluarga (FR-6.4)."""
+        ibu_tools = tools_for(
+            session_factory, db_session, keluarga_dengan_data["ibu"]["id"]
+        )
+        ibu_tools["log_activity"].invoke({"category": "exercise", "quantity": 30})
+
+        ayah_tools = tools_for(
+            session_factory, db_session, keluarga_dengan_data["ayah"]["id"]
+        )
+        hasil = ayah_tools["get_recent_activities"].invoke(
+            {"days": 7, "member_name": "Ibu"}
+        )
+        assert "exercise" in hasil.lower()
+
 
 # --- Anomali ---------------------------------------------------------------
 
