@@ -90,6 +90,9 @@ def test_seed_does_not_overwrite_local_changes() -> None:
 
 @pytest.fixture
 def pg_engine():
+    # ponytail: test ini men-drop schema bersama, jadi tidak aman dijalankan
+    # paralel (pytest -n) — sesekali bentrok dengan koneksi yang masih hidup.
+    # Pakai database per-worker kalau nanti butuh paralel.
     engine = create_engine(TEST_DATABASE_URL, future=True)
     with engine.begin() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"))

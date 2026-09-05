@@ -13,12 +13,14 @@ from app.core.security import get_current_user, require_family_admin
 from app.db.models import Family, FamilyMember, User
 from app.db.session import get_db
 from app.schemas import (
+    DependentCreateRequest,
     FamilyCreateRequest,
     FamilyJoinRequest,
     FamilyMemberListResponse,
     FamilyMemberResponse,
     FamilyMemberUpdateRequest,
     FamilyResponse,
+    UserResponse,
 )
 
 
@@ -205,6 +207,49 @@ def list_members(
             for membership, user in rows
         ]
     )
+
+
+@router.post(
+    "/{family_id}/dependents",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_dependent(
+    family_id: uuid.UUID,
+    payload: DependentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """Buat profil untuk anggota tanpa akun sendiri (anak/lansia), FR-6.3.
+
+    Dibuat tanpa email dan password sehingga tidak bisa login; datanya
+    dikelola sepenuhnya oleh admin pembuatnya.
+    """
+    require_family_admin(db, current_user, family_id)
+
+    dependent = User(
+        full_name=payload.full_name,
+        date_of_birth=payload.date_of_birth,
+        gender=payload.gender,
+        height_cm=payload.height_cm,
+        weight=payload.weight,
+        is_dependent=True,
+        managed_by_user_id=current_user.id,
+    )
+    db.add(dependent)
+    db.flush()
+
+    db.add(
+        FamilyMember(
+            family_id=family_id,
+            user_id=dependent.id,
+            role="member",
+            status="active",
+        )
+    )
+    db.commit()
+    db.refresh(dependent)
+    return dependent
 
 
 @router.patch("/{family_id}/members/{user_id}", response_model=FamilyMemberResponse)

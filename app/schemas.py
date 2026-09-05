@@ -121,6 +121,42 @@ class FamilyMemberUpdateRequest(BaseModel):
     role: Literal["admin", "member"]
 
 
+class DependentCreateRequest(BaseModel):
+    """Profil anggota keluarga yang tidak punya akun sendiri (anak/lansia).
+
+    Tidak ada email maupun password — dependent tidak pernah login,
+    profilnya dikelola admin family (ERD §2.1).
+    """
+
+    full_name: str = Field(min_length=1, max_length=160)
+    date_of_birth: date | None = None
+    gender: str | None = Field(default=None, max_length=32)
+    height_cm: float | None = Field(default=None, gt=MIN_HEIGHT_CM, lt=MAX_HEIGHT_CM)
+    weight: float | None = Field(default=None, gt=MIN_WEIGHT_KG, lt=MAX_WEIGHT_KG)
+
+    @field_validator("full_name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("full_name tidak boleh kosong")
+        return stripped
+
+
+class VisibilitySettingResponse(BaseModel):
+    data_type: str
+    visibility: str
+
+
+class VisibilityListResponse(BaseModel):
+    settings: list[VisibilitySettingResponse]
+
+
+class VisibilityUpdateRequest(BaseModel):
+    data_type: Literal["vitals", "activities", "all"]
+    visibility: Literal["family", "private"]
+
+
 class UserUpdateRequest(BaseModel):
     """Field yang boleh diubah user sendiri.
 
